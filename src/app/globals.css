@@ -1,4 +1,4 @@
-@import "tailwindcss";
+﻿@import "tailwindcss";
 :root {
   --bg: #fbfcfb;
   --panel: #fff;
@@ -1592,4 +1592,52 @@ kbd {
   width: 26px;
   height: 26px;
   border-radius: 50%;
+}
+.migration-panel {
+  margin: 12px 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.migration-panel > div {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  max-height: 65vh;
+  overflow: auto;
+}
+.migration-panel h2 {
+  font-size: 17px;
+  margin: 10px 0;
+}
+.migration-panel p {
+  margin: 8px 0;
+}
+.migration-panel ul {
+  padding-left: 20px;
+}
+.migration-panel textarea,
+.migration-panel select {
+  display: block;
+  width: 100%;
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--line);
+  margin: 10px 0;
+  padding: 8px;
+}
+.migration-panel input[type="file"] {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+}
+.migration-source {
+  display: flex;
+  gap: 8px;
+  align-items: start;
+  margin: 12px 0;
+}
+.migration-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }

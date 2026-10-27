@@ -23,28 +23,34 @@ import {
   Link2,
 } from "lucide-react";
 import { useState } from "react";
-import { supabase } from "@/lib/supabase";
+import { imageUrl } from "@/lib/images";
 import type { IdeaImage } from "@/lib/model";
 function InlineImage({ node, extension, deleteNode }: NodeViewProps) {
   const [url, setUrl] = useState("");
   const path = String(node.attrs.storage_path || "");
   useEffect(() => {
     let live = true;
+    const urls: string[] = [];
     const load = async () => {
       if (/^data:image\/(png|jpeg|webp|gif);base64,/.test(path)) {
         setUrl(path);
         return;
       }
-      const result = await supabase?.storage
-        .from("idea-images")
-        .createSignedUrl(path, 3600);
-      if (live && result?.data) setUrl(result.data.signedUrl);
+      try {
+        const next = await imageUrl(path);
+        urls.push(next);
+        if (live) setUrl(next);
+        else URL.revokeObjectURL(next);
+      } catch {
+        if (live) setUrl("");
+      }
     };
     void load();
     const timer = setInterval(() => void load(), 3000000);
     return () => {
       live = false;
       clearInterval(timer);
+      urls.forEach((url) => URL.revokeObjectURL(url));
     };
   }, [path]);
   return (

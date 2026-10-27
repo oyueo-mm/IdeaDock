@@ -9,3 +9,5 @@ test-results/
 supabase/.temp/
 supabase/.branches/
 next-env.d.ts
+.local/
+.vercel

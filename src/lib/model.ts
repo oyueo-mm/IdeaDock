@@ -24,6 +24,12 @@ export type Idea = {
   updated_at: string;
   deleted_at: string | null;
   version: number;
+  provenance?: {
+    source: string;
+    source_id: string;
+    original_owner: string;
+    fingerprint: string;
+  };
 };
 export type Filter = "all" | "active" | "completed" | "pinned" | "trash";
 export function removeImageContent(
