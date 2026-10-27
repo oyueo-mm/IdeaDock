@@ -1,0 +1,45 @@
+{
+  "name": "ideadock",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "scripts": {
+    "preflight": "node scripts/preflight.mjs",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "test:security": "node scripts/security-test.mjs",
+    "format": "prettier --write src tests scripts/*.mjs *.json *.ts *.mjs docs/*.md README.md"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.80.0",
+    "@tiptap/extension-task-item": "^3.10.0",
+    "@tiptap/extension-task-list": "^3.10.0",
+    "@tiptap/react": "^3.10.0",
+    "@tiptap/starter-kit": "^3.10.0",
+    "lucide-react": "^0.468.0",
+    "next": "^16.0.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
+    "@electric-sql/pglite": "^0.5.12",
+    "@playwright/test": "^1.56.0",
+    "@tailwindcss/postcss": "^4.1.0",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "jsdom": "^30.1.3",
+    "prettier": "^3.9.10",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}
