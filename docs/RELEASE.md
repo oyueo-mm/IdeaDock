@@ -8,7 +8,13 @@
 - [x] 민감정보 패턴 검사 도구 준비. 실제 값은 출력하지 않음
 - [x] `.env*`, `.vercel`, Supabase 임시 인증/연결 파일이 Git에서 제외됨을 확인
 - [x] 첨부가 있는 충돌 복사본의 ID·Storage 경로 재사용 문제 수정 및 회귀 테스트 추가
-- [ ] GitHub main 커밋·푸시 결과 확인
+- [x] GitHub main 일반 커밋·푸시 완료. 강제 push 없음
+
+첫 소스 커밋: [`64fbabe`](https://github.com/oyueo-mm/IdeaDock/commit/64fbabef783e6dbe1a8e3b58a82372cfdebe9890). 업로드된 main SHA와 로컬 SHA가 같은지 확인했습니다. GitHub 계정의 noreply 이메일을 사용했습니다.
+
+이번 연결 준비 검사: Git 후보 파일 37개에서 민감정보 패턴 미검출, 환경변수 이름 일치, 로컬 테스트 26개 통과, 타입 검사·프로덕션 빌드 통과. `.env.local`은 아직 없어 실제 API 검증은 미실행입니다.
+
+GitHub CI: [첫 main 실행](https://github.com/oyueo-mm/IdeaDock/actions/runs/40488944253) **전체 통과**. 깨끗한 Linux 환경에서 `npm ci`, 타입 검사, 단위/DB 테스트, 빌드, 데스크톱/모바일 E2E까지 성공한 상태를 확인했습니다. 이는 클라우드 미연결 상태의 검사이며 실제 Supabase/Google/Vercel 검증을 포함하지 않습니다.
 
 ## 사용자 계정에서 진행할 순서
 
