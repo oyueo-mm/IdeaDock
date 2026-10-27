@@ -1,13 +1,9 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import {
-  Anchor,
   ArrowDownUp,
   ArrowLeft,
-  Check,
   CheckCheck,
-  ChevronRight,
-  Cloud,
   Copy,
   ExternalLink,
   FileText,
@@ -27,7 +23,6 @@ import {
   Pin,
   Plus,
   RotateCcw,
-  Search,
   Settings2,
   Sun,
   Trash2,
@@ -47,8 +42,8 @@ import {
 } from "@/lib/model";
 import { supabase } from "@/lib/supabase";
 import Editor from "./editor";
+import IdeaThumbnail from "./idea-thumbnail";
 import MigrationPanel, { downloadJson } from "./migration-panel";
-import { driveConfigured } from "@/lib/drive";
 import { dataUrl, imageUrl, readImage, uploadDriveImage } from "@/lib/images";
 import { prepareBackup } from "@/lib/migration";
 
@@ -61,7 +56,7 @@ type Layout = {
 const defaultLayout: Layout = {
   left: true,
   right: true,
-  leftWidth: 220,
+  leftWidth: 290,
   rightWidth: 420,
 };
 const nav = [
@@ -82,26 +77,35 @@ export default function Dock() {
   const { ideas, update } = store;
   const [filter, setFilter] = useState<Filter>("all"),
     [tag, setTag] = useState(""),
-    [query, setQuery] = useState(""),
     [sort, setSort] = useState("updated"),
-    [quick, setQuick] = useState(""),
     [selected, setSelected] = useState<string | null>(null);
   const [layout, setLayout] = useState<Layout>(defaultLayout),
     [loaded, setLoaded] = useState(false),
     [mobileNav, setMobileNav] = useState(false),
     [settings, setSettings] = useState(false),
     [theme, setTheme] = useState("system");
-  const quickRef = useRef<HTMLInputElement>(null),
-    searchRef = useRef<HTMLInputElement>(null);
   const current = ideas.find((i) => i.id === selected),
-    visible = selectIdeas(ideas, filter, tag, query, sort),
+    visible = selectIdeas(ideas, filter, tag, "", sort),
     active = ideas.filter((i) => !i.deleted_at),
     tags = Array.from(new Set(active.flatMap((i) => i.tags))).sort();
   const [zoom, setZoom] = useState<string | null>(null);
+  const [offline, setOffline] = useState(false);
+  const [focusTitle, setFocusTitle] = useState<string | null>(null);
+  const [demoNotice, setDemoNotice] = useState(false);
   const settingsRef = useRef<HTMLElement>(null);
   const zoomRef = useRef<HTMLDivElement>(null);
   useDialogFocus(settingsRef, settings);
   useDialogFocus(zoomRef, !!zoom);
+  useEffect(() => {
+    const check = () => setOffline(!navigator.onLine);
+    check();
+    window.addEventListener("online", check);
+    window.addEventListener("offline", check);
+    return () => {
+      window.removeEventListener("online", check);
+      window.removeEventListener("offline", check);
+    };
+  }, []);
   useEffect(() => {
     try {
       const saved = JSON.parse(
@@ -113,7 +117,7 @@ export default function Dock() {
           ...saved,
           leftWidth: Math.min(
             320,
-            Math.max(180, Number(saved.leftWidth) || 220),
+            Math.max(180, Number(saved.leftWidth) || defaultLayout.leftWidth),
           ),
           rightWidth: Math.min(
             680,
@@ -155,18 +159,6 @@ export default function Dock() {
   }, []);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      const typing =
-        target.isContentEditable ||
-        ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        searchRef.current?.focus();
-      }
-      if (e.key === "n" && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
-        e.preventDefault();
-        quickRef.current?.focus();
-      }
       if (e.key === "Escape") {
         if (zoom) {
           setZoom(null);
@@ -197,13 +189,13 @@ export default function Dock() {
     history.replaceState(null, "", location.pathname);
   }
   function add() {
-    const idea = store.create(quick);
+    const idea = store.create("제목 없는 아이디어");
     if (idea) {
-      setQuick("");
-      setQuery("");
       setTag("");
       setFilter("all");
       open(idea);
+      setFocusTitle(idea.id);
+      setMobileNav(false);
     }
   }
   function resize(side: "left" | "right", start: number, initial: number) {
@@ -289,6 +281,7 @@ export default function Dock() {
       downloadJson(result, `ideadock-recovery-${result.id.slice(0, 12)}.json`);
     } catch (error) {
       store.setError(error instanceof Error ? error.message : String(error));
+      throw error;
     }
   }
   const authenticated = !!store.user || store.demo;
@@ -305,57 +298,53 @@ export default function Dock() {
       <a className="skip-link" href="#idea-list">
         아이디어 목록으로 건너뛰기
       </a>
-      {(layout.left || mobileNav) && (
-        <aside
-          className={`sidebar ${mobileNav ? "mobile-open" : ""}`}
-          aria-label="탐색"
-        >
-          <div className="brand">
-            <span className="brand-icon">
-              <Anchor size={22} />
-            </span>
-            <span>
-              IdeaDock<span className="brand-dot">.</span>
-            </span>
-            <button
-              className="icon-button sidebar-collapse"
-              aria-label="왼쪽 패널 접기"
-              onClick={() => {
-                setLayout((prev) => ({ ...prev, left: false }));
-                setMobileNav(false);
-              }}
-            >
-              <PanelLeftClose size={17} />
-            </button>
-          </div>
-          <div className="workspace-label">
-            개인 작업 공간 <span>PRIVATE</span>
-          </div>
+      <aside
+        hidden={!layout.left && !mobileNav}
+        className={`sidebar ${mobileNav ? "mobile-open" : ""}`}
+        aria-label="탐색"
+      >
+        <div className="brand">
+          <span>IdeaDock</span>
           <button
-            className="new-idea"
+            className="icon-button sidebar-collapse"
+            aria-label="왼쪽 패널 접기"
             onClick={() => {
-              quickRef.current?.focus();
+              setLayout((prev) => ({ ...prev, left: false }));
               setMobileNav(false);
             }}
           >
-            <Plus size={17} />새 아이디어<span>N</span>
+            <PanelLeftClose size={17} />
           </button>
-          <div className="nav-caption">라이브러리</div>
-          <nav>
-            {nav.map((item) => (
-              <button
-                key={item.id}
-                className={
-                  filter === item.id && !tag ? "nav-item selected" : "nav-item"
-                }
-                onClick={() => {
-                  setFilter(item.id);
-                  setTag("");
-                  setMobileNav(false);
-                }}
-              >
-                <item.icon size={17} />
-                <span>{item.label}</span>
+        </div>
+        <button
+          className="new-idea"
+          disabled={!authenticated}
+          onClick={add}
+          title={
+            !authenticated
+              ? "Google 로그인 또는 체험 모드에서 사용할 수 있습니다."
+              : undefined
+          }
+        >
+          <Plus size={17} />새 아이디어
+        </button>
+        <div className="nav-caption">라이브러리</div>
+        <nav>
+          {nav.map((item) => (
+            <button
+              key={item.id}
+              className={
+                filter === item.id && !tag ? "nav-item selected" : "nav-item"
+              }
+              onClick={() => {
+                setFilter(item.id);
+                setTag("");
+                setMobileNav(false);
+              }}
+            >
+              <item.icon size={17} />
+              <span>{item.label}</span>
+              {authenticated && (
                 <small>
                   {item.id === "trash"
                     ? ideas.filter((i) => i.deleted_at).length
@@ -367,74 +356,58 @@ export default function Dock() {
                           ? active.filter((i) => i.is_completed).length
                           : active.filter((i) => i.is_pinned).length}
                 </small>
-              </button>
-            ))}
-          </nav>
-          <div className="nav-caption tags-heading">
-            태그 <Hash size={13} />
-          </div>
-          <div className="sidebar-tags">
-            {tags.length ? (
-              tags.map((t, index) => (
-                <button
-                  key={t}
-                  className={`nav-item ${tag === t ? "selected" : ""}`}
-                  onClick={() => {
-                    setTag(t === tag ? "" : t);
-                    setFilter("all");
-                    setMobileNav(false);
-                  }}
-                >
-                  <span className={`tag-dot color-${index % 5}`} />
-                  <span>{t}</span>
-                  <small>
-                    {active.filter((i) => i.tags.includes(t)).length}
-                  </small>
-                </button>
-              ))
-            ) : (
-              <p className="muted sidebar-hint">
-                아이디어에 태그를 붙여
-                <br />
-                생각을 가볍게 정리해 보세요.
-              </p>
-            )}
-          </div>
-          <div className="sidebar-bottom">
-            <div className="small-note">
-              <span className="tiny-spark">✦</span>
-              <span>
-                작은 생각이
-                <br />
-                <strong>다음 시작이 되도록.</strong>
-              </span>
-            </div>
-            <button
-              className="account"
-              aria-label="작업 공간 설정"
-              onClick={() => setSettings(true)}
-            >
-              <span className="avatar">
-                {store.user?.email?.slice(0, 1).toUpperCase() || "I"}
-              </span>
-              <span>
-                <strong>
-                  {store.user?.user_metadata?.full_name ||
-                    (store.demo ? "체험 작업 공간" : "나의 작업 공간")}
-                </strong>
-                <small>
-                  {store.user
-                    ? "Google 계정 연결됨"
-                    : store.demo
-                      ? "이 브라우저에만 저장"
-                      : "계정을 연결해 시작하세요"}
-                </small>
-              </span>
-              <Settings2 size={16} />
+              )}
             </button>
-          </div>
-        </aside>
-      )}
+          ))}
+        </nav>
+        {authenticated && (
+          <>
+            <div className="nav-caption tags-heading">
+              태그 <Hash size={13} />
+            </div>
+            <div className="sidebar-tags">
+              {tags.length ? (
+                tags.map((t, index) => (
+                  <button
+                    key={t}
+                    className={`nav-item ${tag === t ? "selected" : ""}`}
+                    onClick={() => {
+                      setTag(t === tag ? "" : t);
+                      setFilter("all");
+                      setMobileNav(false);
+                    }}
+                  >
+                    <span className={`tag-dot color-${index % 5}`} />
+                    <span>{t}</span>
+                    <small>
+                      {active.filter((i) => i.tags.includes(t)).length}
+                    </small>
+                  </button>
+                ))
+              ) : (
+                <p className="muted sidebar-hint">태그 없음</p>
+              )}
+            </div>
+          </>
+        )}
+        <div className="sidebar-bottom">
+          <MigrationPanel
+            account={store.backend === "drive" ? store.user?.id : undefined}
+            demo={store.demo}
+            pending={store.pendingCount}
+            onRefresh={store.backend === "drive" ? store.refresh : store.flush}
+            onBackup={backup}
+          />
+          <button
+            className="account"
+            aria-label="작업 공간 설정"
+            onClick={() => setSettings(true)}
+          >
+            <Settings2 size={16} />
+            계정 및 설정
+          </button>
+        </div>
+      </aside>
       {layout.left && separator("left")}
       {mobileNav && (
         <button
@@ -456,21 +429,8 @@ export default function Dock() {
             >
               <Menu size={18} />
             </button>
-            <span>내 작업 공간</span>
-            <ChevronRight size={13} />
-            <strong>
-              {tag ? `# ${tag}` : nav.find((i) => i.id === filter)?.label}
-            </strong>
           </div>
           <div className="topbar-actions">
-            <span className="sync-label">
-              <Cloud size={14} />
-              {store.demo
-                ? "체험 모드"
-                : store.user
-                  ? "클라우드 연결"
-                  : "로그인 필요"}
-            </span>
             <button
               className="icon-button"
               aria-label="오른쪽 패널 열기 또는 접기"
@@ -487,168 +447,116 @@ export default function Dock() {
           </div>
         </header>
         <div className="main-content">
-          <div className="page-title">
-            <div>
-              <div className="eyebrow">YOUR IDEAS, A LITTLE CLOSER.</div>
-              <h1>
-                {tag ? `# ${tag}` : nav.find((i) => i.id === filter)?.label}
-                <span>{visible.length}</span>
-              </h1>
-              <p>떠오른 생각을 담고, 하나씩 현실로 만들어 보세요.</p>
+          {authenticated && (
+            <div className="page-title">
+              <div>
+                <h1>
+                  {tag
+                    ? `# ${tag}`
+                    : filter === "all"
+                      ? "아이디어"
+                      : nav.find((i) => i.id === filter)?.label}
+                </h1>
+              </div>
             </div>
-            <span className="title-decoration">
-              <Lightbulb size={31} strokeWidth={1.25} />
-            </span>
-          </div>
+          )}
           {!authenticated && (
             <section className="welcome">
-              <Anchor size={25} />
-              <div>
-                <strong>아이디어가 머무는 나만의 공간</strong>
-                <p>
-                  Google 계정을 연결하면 모든 기기에서 이어서 기록할 수 있어요.
-                </p>
-                {!(store.backend === "drive" ? driveConfigured : supabase) && (
-                  <small>
-                    현재 클라우드 설정이 없습니다. 체험 모드에서 화면과 기능을
-                    확인할 수 있습니다.
-                  </small>
-                )}
-              </div>
+              <p>Google Drive에 연결하여 아이디어를 동기화하세요.</p>
               <div className="welcome-actions">
                 <button className="primary" onClick={login}>
                   Google로 시작하기
                 </button>
-                <button className="text-button" onClick={store.startDemo}>
+                <button
+                  className="text-button"
+                  title="체험 데이터는 이 브라우저에만 보관되며 Google Drive에 동기화되지 않습니다."
+                  onClick={() => {
+                    store.startDemo();
+                    setDemoNotice(true);
+                  }}
+                >
                   체험 모드 열기
                 </button>
               </div>
             </section>
           )}
-          <MigrationPanel
-            account={store.backend === "drive" ? store.user?.id : undefined}
-            demo={store.demo}
-            pending={store.pendingCount}
-            onRefresh={store.backend === "drive" ? store.refresh : store.flush}
-          />
-          <form
-            className="quick-add"
-            onSubmit={(e) => {
-              e.preventDefault();
-              add();
-            }}
-          >
-            <Plus size={20} />
-            <input
-              ref={quickRef}
-              aria-label="새 아이디어 제목"
-              placeholder="어떤 아이디어가 떠올랐나요?"
-              value={quick}
-              disabled={!authenticated}
-              onChange={(e) => setQuick(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.nativeEvent.isComposing) return;
-                if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-                  e.preventDefault();
-                  add();
-                }
-              }}
-            />
-            <button
-              type="submit"
-              disabled={!quick.trim() || !authenticated}
-              aria-label="아이디어 추가"
-            >
-              추가 <span>↵</span>
-            </button>
-          </form>
-          <div className="list-tools">
-            <div className="search-field">
-              <Search size={16} />
-              <input
-                ref={searchRef}
-                aria-label="아이디어 검색"
-                placeholder="제목, 내용, 태그 검색"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-              {query ? (
-                <button aria-label="검색 지우기" onClick={() => setQuery("")}>
-                  <X size={14} />
-                </button>
-              ) : (
-                <kbd>⌘ K</kbd>
-              )}
-            </div>
-            <label className="sort-field">
-              <ArrowDownUp size={14} />
-              <select
-                aria-label="아이디어 정렬"
-                value={sort}
-                onChange={(e) => setSort(e.target.value)}
-              >
-                <option value="updated">최근 수정순</option>
-                <option value="created">최근 생성순</option>
-                <option value="oldest">오래된순</option>
-                <option value="title">제목순</option>
-              </select>
-            </label>
-          </div>
-          <div className="filter-tabs" aria-label="목록 필터">
-            {nav.slice(0, 4).map((n) => (
-              <button
-                key={n.id}
-                className={filter === n.id ? "active" : ""}
-                onClick={() => {
-                  setFilter(n.id);
-                  setTag("");
-                }}
-              >
-                {n.id === "all"
-                  ? "전체"
-                  : n.id === "completed"
-                    ? "완료"
-                    : n.id === "pinned"
-                      ? "고정"
-                      : n.label}
-              </button>
-            ))}
-            {tag && (
-              <button onClick={() => setTag("")}>
-                #{tag} <X size={12} />
-              </button>
-            )}
-            <span className="list-count">{visible.length}개의 생각</span>
-          </div>
-          {store.error && (
-            <div className="error-banner" role="alert">
-              <span>{store.error}</span>
-              <button onClick={() => void store.flush()}>저장 재시도</button>
-              <button
-                aria-label="오류 알림 닫기"
-                onClick={() => store.setError("")}
-              >
-                <X size={15} />
-              </button>
+          {authenticated && (
+            <div className="list-tools">
+              <label className="sort-field">
+                <ArrowDownUp size={14} />
+                <select
+                  aria-label="아이디어 정렬"
+                  value={sort}
+                  onChange={(e) => setSort(e.target.value)}
+                >
+                  <option value="updated">최근 수정순</option>
+                  <option value="created">최근 생성순</option>
+                  <option value="oldest">오래된순</option>
+                  <option value="title">제목순</option>
+                </select>
+              </label>
             </div>
           )}
-          {store.conflicts.map((id) => (
-            <div className="conflict" key={id} role="alert">
-              <strong>
-                {ideas.find((i) => i.id === id)?.title} · 동시 편집 충돌
-              </strong>
-              <p>
-                서버의 변경 내용과 내 초안을 모두 보존하려면 복사본을 만드세요.
-              </p>
-              <button onClick={() => void store.resolve(id, true)}>
-                내 초안을 복사하고 서버 버전 불러오기
-              </button>
-              <button onClick={() => void store.resolve(id, false)}>
-                서버 버전 사용 · 내 변경 버리기
-              </button>
-            </div>
-          ))}
-          {!store.ready ? (
+          <div className="sync-alerts">
+            {store.demo && demoNotice && (
+              <div className="sync-notice" role="status">
+                체험 데이터는 이 브라우저에만 보관되며 Google Drive에 동기화되지
+                않습니다.
+                <button
+                  className="icon-button"
+                  aria-label="체험 데이터 안내 닫기"
+                  onClick={() => setDemoNotice(false)}
+                >
+                  <X size={15} />
+                </button>
+              </div>
+            )}
+            {offline && (
+              <div className="sync-notice" role="status">
+                오프라인입니다. 연결이 복구되면 동기화를 재시도합니다.
+              </div>
+            )}
+            {authenticated && !store.demo && store.pendingCount > 0 && (
+              <div className="sync-notice" role="status">
+                Drive에 저장되지 않은 변경 사항 {store.pendingCount}개
+              </div>
+            )}
+            {/확인 필요|재시도|대기 중/.test(store.status) && !store.error && (
+              <div className="sync-notice" role="status">
+                {store.status}
+              </div>
+            )}
+            {store.error && (
+              <div className="error-banner" role="alert">
+                <span>{store.error}</span>
+                <button onClick={() => void store.flush()}>저장 재시도</button>
+                <button
+                  aria-label="오류 알림 닫기"
+                  onClick={() => store.setError("")}
+                >
+                  <X size={15} />
+                </button>
+              </div>
+            )}
+            {store.conflicts.map((id) => (
+              <div className="conflict" key={id} role="alert">
+                <strong>
+                  {ideas.find((i) => i.id === id)?.title} · 동시 편집 충돌
+                </strong>
+                <p>
+                  서버의 변경 내용과 내 초안을 모두 보존하려면 복사본을
+                  만드세요.
+                </p>
+                <button onClick={() => void store.resolve(id, true)}>
+                  내 초안을 복사하고 서버 버전 불러오기
+                </button>
+                <button onClick={() => void store.resolve(id, false)}>
+                  서버 버전 사용 · 내 변경 버리기
+                </button>
+              </div>
+            ))}
+          </div>
+          {!authenticated ? null : !store.ready ? (
             <div className="empty">
               <LoaderCircle className="spin" />
               작업 공간을 불러오는 중…
@@ -677,8 +585,7 @@ export default function Dock() {
                       )}
                     </span>
                     <span className="idea-preview">
-                      {idea.plain_text ||
-                        "아직 적어둔 메모가 없어요. 생각을 이어가 보세요."}
+                      {idea.plain_text || "본문 없음"}
                     </span>
                     <span className="idea-meta">
                       {idea.tags.map((t, index) => (
@@ -725,53 +632,27 @@ export default function Dock() {
                       </button>
                     )}
                   </div>
+                  {idea.images[0] && (
+                    <IdeaThumbnail
+                      image={idea.images[0]}
+                      title={idea.title}
+                      onOpen={() => open(idea)}
+                    />
+                  )}
                 </article>
               ))}
             </div>
           ) : (
             <div className="empty">
-              <div className="empty-icon">
-                {query ? (
-                  <Search size={30} />
-                ) : filter === "completed" ? (
-                  <CheckCheck size={30} />
-                ) : (
-                  <Lightbulb size={30} />
-                )}
-              </div>
               <h2>
-                {query
-                  ? "검색 결과가 없어요"
-                  : filter === "trash"
-                    ? "휴지통이 비어 있어요"
-                    : filter === "completed"
-                      ? "완성한 아이디어가 여기에 모여요"
-                      : "새로운 생각을 위한 빈 공간"}
+                {filter === "trash"
+                  ? "휴지통이 비어 있습니다"
+                  : filter === "completed"
+                    ? "완료한 아이디어가 없습니다"
+                    : "아이디어가 없습니다"}
               </h2>
-              <p>
-                {query
-                  ? "다른 단어나 태그로 다시 찾아보세요."
-                  : "거창하지 않아도 괜찮아요. 제목 한 줄로 시작해 보세요."}
-              </p>
-              {authenticated && filter === "all" && !query && (
-                <button
-                  className="text-button"
-                  onClick={() => quickRef.current?.focus()}
-                >
-                  <Plus size={15} />첫 아이디어 기록하기
-                </button>
-              )}
             </div>
           )}
-          <footer className="list-footer">
-            <span>
-              <span className="status-dot" />
-              {store.status || "생각이 떠오르는 순간, 기록하세요."}
-            </span>
-            <span>
-              빠른 기록 <kbd>N</kbd> · 검색 <kbd>⌘ K</kbd>
-            </span>
-          </footer>
         </div>
       </main>
       {layout.right && separator("right")}
@@ -812,31 +693,13 @@ export default function Dock() {
               drive={store.backend === "drive" && !store.demo}
               onError={store.setError}
               onZoom={setZoom}
-              status={store.status}
+              focusTitle={focusTitle === current.id}
             />
-          ) : (
+          ) : authenticated ? (
             <div className="detail-placeholder">
-              <div className="note-illustration">
-                <div className="paper">
-                  <Lightbulb size={29} strokeWidth={1.3} />
-                  <i />
-                  <i />
-                  <i />
-                </div>
-                <span>✦</span>
-              </div>
-              <h2>생각의 다음 페이지</h2>
-              <p>
-                아이디어를 선택하면
-                <br />
-                여기에서 이야기를 이어갈 수 있어요.
-              </p>
-              <div className="detail-hint">
-                <Check size={14} />
-                내용은 자동으로 저장됩니다
-              </div>
+              <h2>선택한 아이디어 없음</h2>
             </div>
-          )}
+          ) : null}
         </aside>
       )}
       {settings && (
@@ -874,7 +737,9 @@ export default function Dock() {
             </div>
             <p className="settings-account">
               {store.user?.email ||
-                "Google 계정 연결로 기기 간 동기화를 시작하세요."}
+                (store.demo
+                  ? "체험 데이터는 이 브라우저에만 보관되며 Google Drive에 동기화되지 않습니다."
+                  : "로그인되지 않음")}
             </p>
             {!store.user && (
               <button className="primary" onClick={login}>
@@ -902,9 +767,6 @@ export default function Dock() {
                 이전 Supabase 계정 연결 · 데이터 조사용
               </button>
             )}
-            <button className="settings-button" onClick={backup}>
-              현재 데이터 JSON 백업
-            </button>
             <button
               className="settings-button"
               onClick={() => setLayout(defaultLayout)}
@@ -923,12 +785,6 @@ export default function Dock() {
                 {store.demo ? "체험 모드 나가기" : "로그아웃"}
               </button>
             )}
-            <small>
-              IdeaDock v0.1 ·{" "}
-              {store.demo
-                ? "체험 데이터는 이 브라우저에만 보관됩니다."
-                : "개인 아이디어 작업 공간"}
-            </small>
           </section>
         </div>
       )}
@@ -959,7 +815,7 @@ function Detail({
   drive,
   onError,
   onZoom,
-  status,
+  focusTitle,
 }: {
   idea: Idea;
   onChange: (idea: Idea) => void;
@@ -967,8 +823,15 @@ function Detail({
   drive: boolean;
   onError: (text: string) => void;
   onZoom: (url: string) => void;
-  status: string;
+  focusTitle: boolean;
 }) {
+  const titleRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (focusTitle) {
+      titleRef.current?.focus();
+      titleRef.current?.select();
+    }
+  }, [focusTitle]);
   const latest = useRef(idea);
   latest.current = idea;
   const [tagText, setTagText] = useState(""),
@@ -1142,6 +1005,7 @@ function Detail({
         </div>
       </div>
       <textarea
+        ref={titleRef}
         className="detail-title"
         aria-label="아이디어 제목 편집"
         value={idea.title}
@@ -1278,11 +1142,6 @@ function Detail({
             </button>
           </div>
         ))}
-        {!idea.links.length && !linkOpen && (
-          <p className="section-empty">
-            웹사이트나 GitHub 링크를 연결해 보세요.
-          </p>
-        )}
         {linkOpen && (
           <form
             className="link-form"
@@ -1394,10 +1253,6 @@ function Detail({
           <small>본문에 붙여넣기도 가능 · 최대 5MB</small>
         </button>
       </section>
-      <div className="detail-save-status" role="status">
-        <Cloud size={14} />
-        {status || "작성 내용은 자동으로 저장됩니다."}
-      </div>
     </div>
   );
 }

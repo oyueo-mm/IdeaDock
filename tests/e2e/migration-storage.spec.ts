@@ -1,3 +1,4 @@
+import { openData, openNav } from "./helpers";
 import { test, expect } from "@playwright/test";
 import { makeIdea } from "../../src/lib/model";
 
@@ -14,14 +15,9 @@ test("JSON preview can be edited, backed up and restored without overwriting the
       ),
     existing,
   );
+  await openData(page);
   await page
-    .getByRole("button", {
-      name: "기존 데이터 이전 · 백업 · 가져오기",
-      exact: true,
-    })
-    .click();
-  await page
-    .getByRole("button", { name: "저장소 다시 조사", exact: true })
+    .getByRole("button", { name: "JSON 가져오기", exact: true })
     .click();
   const candidate = makeIdea("가져올 제목", "demo");
   candidate.is_pinned = true;
@@ -93,6 +89,10 @@ test("JSON preview can be edited, backed up and restored without overwriting the
     content: candidate.content,
   });
   await page
+    .getByRole("button", { name: "데이터 관리 닫기", exact: true })
+    .click();
+  await page.keyboard.press("Escape");
+  await page
     .getByRole("button", { name: "체험 모드 열기", exact: true })
     .click();
   await expect(
@@ -115,20 +115,14 @@ test("a corrupt demo cache is reported and preserved instead of being initialize
   await expect(
     page.getByRole("alert").filter({ hasText: /JSON|Unexpected|Expected/ }),
   ).toBeVisible();
-  await page
-    .getByRole("textbox", { name: "새 아이디어 제목", exact: true })
-    .fill("새 내용");
-  await page
-    .getByRole("textbox", { name: "새 아이디어 제목", exact: true })
-    .press("Enter");
+  await openNav(page);
+  await page.getByRole("button", { name: "새 아이디어", exact: true }).click();
   expect(
     await page.evaluate(() => localStorage.getItem("ideadock:data:demo")),
   ).toBe(raw);
+  await openData(page);
   await page
-    .getByRole("button", {
-      name: "기존 데이터 이전 · 백업 · 가져오기",
-      exact: true,
-    })
+    .getByRole("button", { name: "기존 데이터 찾기", exact: true })
     .click();
   await page
     .getByRole("button", { name: "저장소 다시 조사", exact: true })
