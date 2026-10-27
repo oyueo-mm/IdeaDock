@@ -1,5 +1,5 @@
 param(
- [ValidateSet('Check','LinkDatabase','Migrate','Preview','Production')][string]$Action='Check',
+ [ValidateSet('Check','LinkDatabase','Migrate')][string]$Action='Check',
  [string]$ProjectRef
 )
 $ErrorActionPreference='Stop'
@@ -24,6 +24,4 @@ switch($Action){
   Invoke-Checked -Arguments @('supabase','db','push','--dry-run')
   Invoke-Checked -Arguments @('supabase','db','push')
  }
- 'Preview' {Invoke-Checked -Arguments @('vercel','login');Invoke-Checked -Arguments @('vercel','link');Invoke-Checked -Arguments @('vercel')}
- 'Production' {Invoke-Checked -Arguments @('vercel','--prod')}
 }

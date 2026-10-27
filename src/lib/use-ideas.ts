@@ -1,355 +1,389 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { User } from "@supabase/supabase-js";
-import { supabase } from "./supabase";
 import { Idea, makeIdea } from "./model";
+import { validateIdeas } from "./integrity";
+import { localDb } from "./local-db";
+import {
+  connectDrive,
+  disconnectDrive,
+  DriveRepository,
+  GoogleDrive,
+  GoogleUser,
+  loadGoogle,
+  driveConfigured,
+  driveCacheKey,
+  Revision,
+} from "./drive";
+import { useLegacyIdeas } from "./use-legacy-ideas";
 
-type Pending = { idea: Idea; seq: number };
-type Cache = { ideas: Idea[]; pending: Record<string, Pending> };
-export function useIdeas() {
-  const [user, setUser] = useState<User | null>(null),
-    [demo, setDemo] = useState(false),
-    [ready, setReady] = useState(false);
-  const [ideas, setIdeas] = useState<Idea[]>([]),
-    [status, setStatus] = useState(""),
-    [error, setError] = useState(""),
-    [conflicts, setConflicts] = useState<string[]>([]);
-  const data = useRef<Idea[]>([]),
-    pending = useRef<Record<string, Pending>>({}),
-    identity = useRef<string | null>(null),
-    busy = useRef(false),
-    generation = useRef(0),
-    sequence = useRef(0),
+type Pending = { idea: Idea; parent: string | null; seq: number };
+type Cache = {
+  ideas: Idea[];
+  pending: Record<string, Pending>;
+  heads: Record<string, string>;
+};
+export function useDriveIdeas() {
+  const [user, setUser] = useState<GoogleUser | null>(null);
+  const [demo, setDemo] = useState(false);
+  const [ideas, setIdeas] = useState<Idea[]>([]);
+  const [status, setStatus] = useState("");
+  const [error, setError] = useState("");
+  const [conflicts, setConflicts] = useState<string[]>([]);
+  const owner = useRef<string | null>(null);
+  const cache = useRef<Cache>({ ideas: [], pending: {}, heads: {} });
+  const repo = useRef<DriveRepository | null>(null);
+  const epoch = useRef(0),
     revision = useRef(0),
-    blocked = useRef(new Set<string>()),
-    timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const publish = useCallback((next: Idea[]) => {
+    seq = useRef(0);
+  const busy = useRef(false),
+    initialized = useRef(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const disk = useRef(Promise.resolve());
+  const branches = useRef<Record<string, Revision[]>>({});
+  const publish = useCallback(() => {
     revision.current++;
-    data.current = next;
-    setIdeas(next);
+    setIdeas([...cache.current.ideas]);
   }, []);
-  const persist = useCallback(() => {
-    if (!identity.current) return;
-    try {
-      localStorage.setItem(
-        `ideadock:data:${identity.current}`,
-        JSON.stringify({ ideas: data.current, pending: pending.current }),
-      );
-      return true;
-    } catch {
-      setError(
-        "이 기기에 임시 저장하지 못했습니다. 저장 공간을 확인하고 탭을 닫기 전에 백업을 내려받으세요.",
-      );
-      return false;
+  const persist = useCallback(async () => {
+    const account = owner.current;
+    if (!account || !initialized.current) return;
+    const snapshot = structuredClone(cache.current);
+    if (account === "demo") {
+      // Keep the established demo format readable by the old release.
+      localStorage.setItem("ideadock:data:demo", JSON.stringify(snapshot));
+    } else {
+      disk.current = disk.current
+        .catch(() => {})
+        .then(() => localDb.set(driveCacheKey(account), snapshot));
+      await disk.current;
     }
   }, []);
+  const report = useCallback(
+    (e: unknown) => setError(e instanceof Error ? e.message : String(e)),
+    [],
+  );
   const refresh = useCallback(async () => {
+    if (!repo.current || busy.current || !initialized.current) return;
+    const generation = epoch.current,
+      started = revision.current,
+      account = owner.current;
+    const rows = await repo.current.list();
     if (
-      !supabase ||
-      !identity.current ||
-      identity.current === "demo" ||
-      busy.current
+      epoch.current !== generation ||
+      revision.current !== started ||
+      account !== owner.current
     )
       return;
-    const owner = identity.current,
-      epoch = generation.current,
-      started = revision.current;
-    const { data: rows, error: failure } = await supabase.rpc("list_ideas");
-    if (
-      epoch !== generation.current ||
-      owner !== identity.current ||
-      started !== revision.current
-    )
-      return;
-    if (failure) {
-      setError(`불러오기 실패: ${failure.message}`);
-      return;
+    const pending = cache.current.pending;
+    const next: Idea[] = rows.map((r) => pending[r.idea.id]?.idea ?? r.idea);
+    for (const p of Object.values(pending))
+      if (!next.some((i) => i.id === p.idea.id)) next.push(p.idea);
+    for (const row of rows) {
+      if (!pending[row.idea.id]) cache.current.heads[row.idea.id] = row.head;
+      if (row.conflicts.length) branches.current[row.idea.id] = row.conflicts;
     }
-    const remote = (rows || []) as Idea[];
-    for (const item of Object.values(pending.current)) {
-      const index = remote.findIndex((i) => i.id === item.idea.id);
-      if (index < 0) remote.push(item.idea);
-      else remote[index] = item.idea;
-    }
-    publish(remote);
-    persist();
+    setConflicts([
+      ...new Set([
+        ...Object.keys(branches.current),
+        ...rows
+          .filter(
+            (r) => pending[r.idea.id] && pending[r.idea.id].parent !== r.head,
+          )
+          .map((r) => r.idea.id),
+      ]),
+    ]);
+    cache.current.ideas = next;
+    publish();
+    await persist();
   }, [persist, publish]);
   const flush = useCallback(async () => {
-    if (busy.current || !identity.current) return;
-    if (identity.current === "demo") {
-      if (persist()) setStatus("이 브라우저에 저장됨");
+    if (busy.current || !owner.current || !initialized.current) return;
+    if (owner.current === "demo") {
+      try {
+        await persist();
+        setStatus("이 브라우저에 저장됨");
+      } catch (e) {
+        report(e);
+      }
       return;
     }
-    if (!supabase) return;
+    if (!repo.current) return;
     busy.current = true;
-    const epoch = generation.current;
+    const generation = epoch.current;
     try {
-      for (const [id, item] of Object.entries(pending.current)) {
-        if (epoch !== generation.current) break;
-        if (blocked.current.has(id)) continue;
-        setStatus("저장 중…");
-        const { data: result, error: failure } = await supabase.rpc(
-          "save_idea",
-          { document: item.idea, expected_version: item.idea.version },
-        );
-        if (epoch !== generation.current) break;
-        if (failure) {
-          if (failure.message.includes("VERSION_CONFLICT")) {
-            blocked.current.add(id);
-            setConflicts((prev) => Array.from(new Set([...prev, id])));
-            setError(
-              "다른 기기에서 변경된 아이디어가 있습니다. 두 버전을 확인해 주세요.",
+      await persist(); // Never send a draft before durable local storage succeeds.
+      for (const [id, p] of Object.entries(cache.current.pending)) {
+        if (epoch.current !== generation) break;
+        setStatus("Drive에 저장 중…");
+        try {
+          const saved = await repo.current.save(p.idea, p.parent);
+          if (epoch.current !== generation) break;
+          const current = cache.current.pending[id];
+          cache.current.heads[id] = saved.head;
+          if (current?.seq === p.seq) {
+            delete cache.current.pending[id];
+            cache.current.ideas = cache.current.ideas.map((i) =>
+              i.id === id ? saved.idea : i,
             );
-          } else
-            setError(
-              `저장 실패 · 초안은 이 기기에 보관됩니다: ${failure.message}`,
+          } else if (current) {
+            current.parent = saved.head;
+            current.idea = { ...current.idea, version: saved.idea.version };
+            cache.current.ideas = cache.current.ideas.map((i) =>
+              i.id === id ? current.idea : i,
             );
-          setStatus("저장 확인 필요");
-          break;
+          }
+          publish();
+          await persist();
+        } catch (e) {
+          if (epoch.current !== generation) break;
+          if (e instanceof Error && e.message === "VERSION_CONFLICT") {
+            setConflicts((prev) => [...new Set([...prev, id])]);
+            setError(
+              "다른 기기의 변경 내용이 있습니다. 서버 버전과 내 초안을 확인해 주세요.",
+            );
+          } else report(e);
+          setStatus("초안 보관됨 · 재시도 필요");
+          return;
         }
-        const saved = result as Idea;
-        const current = pending.current[id];
-        if (current?.seq === item.seq) {
-          delete pending.current[id];
-          publish(data.current.map((i) => (i.id === id ? saved : i)));
-        } else if (current) {
-          current.idea = { ...current.idea, version: saved.version };
-          publish(
-            data.current.map((i) =>
-              i.id === id ? { ...i, version: saved.version } : i,
-            ),
-          );
-        }
-        persist();
-        setStatus(
-          Object.keys(pending.current).length
-            ? "변경 내용 대기 중"
-            : "모든 변경사항 저장됨",
-        );
-        if (!Object.keys(pending.current).length && !blocked.current.size)
-          setError("");
       }
-    } catch (failure) {
-      setError(
-        failure instanceof Error ? failure.message : "연결을 확인해 주세요.",
-      );
-      setStatus("저장 확인 필요");
+      if (epoch.current === generation) {
+        setStatus(
+          Object.keys(cache.current.pending).length
+            ? "변경 내용 대기 중"
+            : "Google Drive에 저장됨",
+        );
+        setError("");
+      }
+    } catch (e) {
+      if (epoch.current === generation) report(e);
     } finally {
       busy.current = false;
     }
-  }, [persist, publish]);
+  }, [persist, publish, report]);
   useEffect(() => {
-    if (!supabase) {
-      setReady(true);
-      return;
-    }
-    const { data: subscription } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        setUser(session?.user ?? null);
-        if (session?.user) setDemo(false);
-        setReady(true);
-      },
-    );
-    return () => subscription.subscription.unsubscribe();
-  }, []);
+    if (driveConfigured) void loadGoogle().catch(report);
+  }, [report]);
   useEffect(() => {
-    const owner = demo ? "demo" : (user?.id ?? null);
-    generation.current++;
-    identity.current = owner;
-    pending.current = {};
-    blocked.current.clear();
-    publish([]);
+    const account = demo ? "demo" : (user?.id ?? null);
+    const generation = ++epoch.current;
+    owner.current = account;
+    initialized.current = false;
+    cache.current = { ideas: [], pending: {}, heads: {} };
+    branches.current = {};
     setConflicts([]);
+    publish();
     setError("");
     setStatus("");
-    if (!owner) return;
-    try {
-      const cached = JSON.parse(
-        localStorage.getItem(`ideadock:data:${owner}`) || "null",
-      ) as Cache | null;
-      if (cached) {
-        pending.current = cached.pending || {};
-        sequence.current = Math.max(
-          0,
-          ...Object.values(pending.current).map((p) => p.seq),
-        );
-        publish(cached.ideas || []);
+    repo.current =
+      account && account !== "demo"
+        ? new DriveRepository(account, new GoogleDrive(account))
+        : null;
+    if (!account) return;
+    void (async () => {
+      try {
+        const cached =
+          account === "demo"
+            ? JSON.parse(localStorage.getItem("ideadock:data:demo") || "null")
+            : await localDb.get<Cache>(driveCacheKey(account));
+        if (epoch.current !== generation) return;
+        if (cached) {
+          validateIdeas(cached.ideas);
+          cache.current = {
+            ...cached,
+            pending: cached.pending ?? {},
+            heads: cached.heads ?? {},
+          };
+          for (const p of Object.values(cache.current.pending))
+            validateIdeas([p.idea]);
+          seq.current = Math.max(
+            0,
+            ...Object.values(cache.current.pending).map((p) => p.seq),
+          );
+          publish();
+        }
+        initialized.current = true;
+        if (account === "demo") setStatus("체험 모드 · 이 브라우저에만 저장");
+        else {
+          await flush();
+          await refresh();
+        }
+      } catch (e) {
+        if (epoch.current === generation) report(e);
       }
-    } catch {
-      setError(
-        "임시 저장 파일을 읽지 못했습니다. 브라우저 저장 공간을 확인해 주세요.",
-      );
-    }
-    if (owner !== "demo") {
-      void refresh();
-      void flush();
-    } else setStatus("체험 모드 · 이 브라우저에만 저장");
-  }, [user?.id, demo, flush, publish, refresh]);
+    })();
+  }, [user?.id, demo, flush, refresh, publish, report]);
   useEffect(() => {
-    const interval = setInterval(() => {
-      void flush();
-      void refresh();
-    }, 15000);
-    const online = () => {
-      void flush();
-      void refresh();
+    const sync = () => {
+      void (async () => {
+        await flush();
+        await refresh();
+      })().catch(report);
     };
-    const leave = (e: BeforeUnloadEvent) => {
-      persist();
-      if (identity.current !== "demo" && Object.keys(pending.current).length) {
-        e.preventDefault();
-        e.returnValue = "";
+    const interval = setInterval(sync, 15000);
+    const leave = (event: BeforeUnloadEvent) => {
+      if (
+        owner.current !== "demo" &&
+        Object.keys(cache.current.pending).length
+      ) {
+        event.preventDefault();
+        event.returnValue = "";
       }
     };
-    window.addEventListener("online", online);
+    window.addEventListener("online", sync);
     window.addEventListener("beforeunload", leave);
     return () => {
       clearInterval(interval);
-      window.removeEventListener("online", online);
-      window.removeEventListener("beforeunload", leave);
       if (timer.current) clearTimeout(timer.current);
+      window.removeEventListener("online", sync);
+      window.removeEventListener("beforeunload", leave);
     };
-  }, [flush, refresh, persist]);
+  }, [flush, refresh, report]);
   const update = useCallback(
     (idea: Idea) => {
-      if (!identity.current || idea.user_id !== identity.current) return;
+      if (
+        !initialized.current ||
+        !owner.current ||
+        idea.user_id !== owner.current
+      )
+        return;
       const next = { ...idea, updated_at: new Date().toISOString() };
-      publish(
-        data.current.some((i) => i.id === next.id)
-          ? data.current.map((i) => (i.id === next.id ? next : i))
-          : [next, ...data.current],
-      );
-      pending.current[next.id] = { idea: next, seq: ++sequence.current };
-      if (persist())
-        setStatus(
-          identity.current === "demo"
-            ? "이 브라우저에 저장됨"
-            : "변경 내용 임시 보관됨",
-        );
+      const parent =
+        cache.current.pending[idea.id]?.parent ??
+        cache.current.heads[idea.id] ??
+        null;
+      cache.current.pending[idea.id] = {
+        idea: next,
+        parent,
+        seq: ++seq.current,
+      };
+      cache.current.ideas = cache.current.ideas.some((i) => i.id === next.id)
+        ? cache.current.ideas.map((i) => (i.id === next.id ? next : i))
+        : [next, ...cache.current.ideas];
+      publish();
+      void persist()
+        .then(() =>
+          setStatus(
+            owner.current === "demo"
+              ? "이 브라우저에 저장됨"
+              : "기기에 초안 저장됨",
+          ),
+        )
+        .catch(report);
       if (timer.current) clearTimeout(timer.current);
       timer.current = setTimeout(() => void flush(), 700);
     },
-    [flush, persist, publish],
-  );
-  const create = useCallback(
-    (title: string) => {
-      if (!identity.current || !title.trim()) return;
-      const idea = makeIdea(title, identity.current);
-      update(idea);
-      return idea;
-    },
-    [update],
+    [persist, flush, publish, report],
   );
   async function resolve(id: string, keepLocal: boolean) {
-    if (!supabase) return;
-    const epoch = generation.current;
-    const { data: rows, error: failure } = await supabase.rpc("list_ideas");
-    if (epoch !== generation.current) return;
-    if (failure) {
-      setError(failure.message);
-      return;
-    }
-    const remote = (rows as Idea[]).find((i) => i.id === id),
-      local = data.current.find((i) => i.id === id);
-    if (keepLocal && local) {
-      const copyId = crypto.randomUUID();
-      const imageMap = new Map<string, Idea["images"][number]>();
-      try {
-        for (const image of local.images) {
-          const id = crypto.randomUUID();
-          const storage_path = `${local.user_id}/${copyId}/${id}`;
-          const result = await supabase.storage
-            .from("idea-images")
-            .copy(image.storage_path, storage_path);
-          if (epoch !== generation.current) return;
-          if (result.error) throw result.error;
-          imageMap.set(image.id, { ...image, id, storage_path });
-        }
-      } catch {
-        setError(
-          "이미지를 복사하지 못했습니다. 원래 초안은 보존되어 있습니다. 연결을 확인하고 다시 시도해 주세요.",
-        );
-        return;
-      }
-      if (data.current.find((i) => i.id === id) !== local) {
-        setError(
-          "복사하는 동안 초안이 변경되었습니다. 최신 내용을 보존했으니 다시 시도해 주세요.",
-        );
-        return;
-      }
-      const remapImages = (
-        node: Record<string, unknown>,
-      ): Record<string, unknown> => {
-        const attrs = node.attrs as { id?: string } | undefined;
-        const image = attrs?.id ? imageMap.get(attrs.id) : undefined;
-        return {
-          ...node,
-          ...(node.type === "ideaImage" && image
-            ? { attrs: { ...attrs, ...image } }
-            : {}),
-          ...(Array.isArray(node.content)
-            ? {
-                content: node.content.map((child) =>
-                  remapImages(child as Record<string, unknown>),
-                ),
-              }
-            : {}),
-        };
-      };
-      const copy = {
-        ...local,
-        id: copyId,
-        links: local.links.map((link) => ({
-          ...link,
+    if (!repo.current) return;
+    const generation = epoch.current;
+    try {
+      const rows = await repo.current.list();
+      if (epoch.current !== generation) return;
+      const row = rows.find((r) => r.idea.id === id);
+      const local = cache.current.ideas.find((i) => i.id === id);
+      if (keepLocal && local) {
+        const copy = {
+          ...structuredClone(local),
           id: crypto.randomUUID(),
-        })),
-        images: Array.from(imageMap.values()),
-        content: remapImages(local.content),
-        title: `${local.title} (내 초안)`,
-        version: 0,
-        created_at: new Date().toISOString(),
-      };
-      update(copy);
+          title: `${local.title} (내 초안)`,
+          version: 0,
+          created_at: new Date().toISOString(),
+        };
+        update(copy);
+      }
+      // Sibling revisions stay on Drive. Keep each alternative as an explicit
+      // new idea when resolving, so a remote concurrent draft is never hidden.
+      if (row?.conflicts.length) {
+        for (const branch of row.conflicts.slice(1))
+          update({
+            ...branch.idea,
+            id: crypto.randomUUID(),
+            title: `${branch.idea.title} (다른 기기 초안)`,
+            version: 0,
+          });
+        await persist();
+        // Append a joining revision acknowledging ALL siblings (see repository).
+        await repo.current.join(row);
+        if (epoch.current !== generation) return;
+      }
+      delete cache.current.pending[id];
+      delete branches.current[id];
+      cache.current.ideas = cache.current.ideas
+        .filter((i) => i.id !== id)
+        .concat(row ? [row.idea] : []);
+      if (row) cache.current.heads[id] = row.head;
+      setConflicts((prev) => prev.filter((key) => key !== id));
+      publish();
+      await persist();
+      await refresh();
+    } catch (e) {
+      report(e);
     }
-    delete pending.current[id];
-    blocked.current.delete(id);
-    publish(
-      data.current.filter((i) => i.id !== id).concat(remote ? [remote] : []),
-    );
-    persist();
-    setConflicts((prev) => prev.filter((x) => x !== id));
-    setError("");
-    void flush();
-  }
-  async function signOut() {
-    if (Object.keys(pending.current).length && identity.current !== "demo") {
-      setError(
-        "아직 서버에 저장되지 않은 내용이 있습니다. 재시도하거나 백업한 후 로그아웃해 주세요.",
-      );
-      return;
-    }
-    if (demo) {
-      setDemo(false);
-      return;
-    }
-    const result = await supabase?.auth.signOut();
-    if (result?.error) setError(result.error.message);
   }
   return {
+    backend: "drive" as const,
     user,
     demo,
-    ready,
+    ready: true,
     ideas,
     status,
     error,
     setError,
     conflicts,
-    resolve,
     update,
-    create,
     flush,
-    signOut,
+    refresh,
+    resolve,
+    create: (title: string) => {
+      if (!owner.current || !initialized.current || !title.trim()) return;
+      const idea = makeIdea(title, owner.current);
+      update(idea);
+      return idea;
+    },
+    login: async () => {
+      if (!demo && Object.keys(cache.current.pending).length && user) {
+        // Reauthorization is allowed, but account switching with drafts is not.
+        const next = await connectDrive();
+        if (next.id !== user.id) {
+          disconnectDrive();
+          throw new Error(
+            "미저장 초안이 있습니다. 원래 계정으로 다시 연결한 후 저장하세요.",
+          );
+        }
+        await flush();
+        await refresh();
+        return;
+      }
+      await persist();
+      const next = await connectDrive();
+      if (next.id === user?.id && !demo) {
+        await flush();
+        await refresh();
+      } else {
+        setDemo(false);
+        setUser(next);
+      }
+    },
+    signOut: async () => {
+      if (!demo && Object.keys(cache.current.pending).length) {
+        setError(
+          "Drive에 저장되지 않은 초안이 있습니다. 저장 또는 백업 후 로그아웃하세요.",
+        );
+        return;
+      }
+      await persist();
+      disconnectDrive();
+      setUser(null);
+      setDemo(false);
+    },
     startDemo: () => setDemo(true),
-    pendingCount: Object.keys(pending.current).length,
+    pendingCount: Object.keys(cache.current.pending).length,
   };
 }
+// Explicit rollback switch. Both implementations remain available until live
+// migration and multi-device acceptance checks have been completed.
+export const useIdeas =
+  process.env.NEXT_PUBLIC_STORAGE_BACKEND === "legacy"
+    ? useLegacyIdeas
+    : useDriveIdeas;

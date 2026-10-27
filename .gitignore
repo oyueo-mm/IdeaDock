@@ -1,5 +1,6 @@
 node_modules/
 .next/
+out/
 .env*
 !.env.example
 playwright-report/
@@ -9,3 +10,5 @@ test-results/
 supabase/.temp/
 supabase/.branches/
 next-env.d.ts
+.local/
+.vercel

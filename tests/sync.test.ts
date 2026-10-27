@@ -32,7 +32,7 @@ vi.mock("../src/lib/supabase", () => ({
       method === "list_ideas" ? server.list() : server.save(args),
   },
 }));
-import { useIdeas } from "../src/lib/use-ideas";
+import { useLegacyIdeas as useIdeas } from "../src/lib/use-legacy-ideas";
 beforeEach(() => {
   localStorage.clear();
   server.rows = [];

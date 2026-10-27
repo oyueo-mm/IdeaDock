@@ -47,6 +47,10 @@ import {
 } from "@/lib/model";
 import { supabase } from "@/lib/supabase";
 import Editor from "./editor";
+import MigrationPanel, { downloadJson } from "./migration-panel";
+import { driveConfigured } from "@/lib/drive";
+import { dataUrl, imageUrl, readImage, uploadDriveImage } from "@/lib/images";
+import { prepareBackup } from "@/lib/migration";
 
 type Layout = {
   left: boolean;
@@ -263,35 +267,29 @@ export default function Dock() {
     );
   }
   async function login() {
-    if (!supabase) {
-      store.setError(
-        "Supabase 연결 정보가 필요합니다. .env.example과 README의 설정 방법을 확인해 주세요.",
-      );
-      return;
+    try {
+      await store.login();
+    } catch (error) {
+      store.setError(error instanceof Error ? error.message : String(error));
     }
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: "google",
-      options: { redirectTo: location.origin },
-    });
-    if (error) store.setError(error.message);
   }
-  function backup() {
-    const blob = new Blob(
-      [
-        JSON.stringify(
-          { exported_at: new Date().toISOString(), ideas },
-          null,
-          2,
-        ),
-      ],
-      { type: "application/json" },
-    );
-    const url = URL.createObjectURL(blob),
-      a = document.createElement("a");
-    a.href = url;
-    a.download = `ideadock-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+  async function backup() {
+    try {
+      if (!ideas.length) {
+        downloadJson({ ideas: [] }, "ideadock-empty-backup.json");
+        return;
+      }
+      const owner = store.demo ? "demo" : `${store.backend}:${store.user?.id}`;
+      const result = await prepareBackup(
+        [{ id: owner, label: "현재 작업 공간", ideas }],
+        readImage,
+        dataUrl,
+        null,
+      );
+      downloadJson(result, `ideadock-recovery-${result.id.slice(0, 12)}.json`);
+    } catch (error) {
+      store.setError(error instanceof Error ? error.message : String(error));
+    }
   }
   const authenticated = !!store.user || store.demo;
   return (
@@ -510,7 +508,7 @@ export default function Dock() {
                 <p>
                   Google 계정을 연결하면 모든 기기에서 이어서 기록할 수 있어요.
                 </p>
-                {!supabase && (
+                {!(store.backend === "drive" ? driveConfigured : supabase) && (
                   <small>
                     현재 클라우드 설정이 없습니다. 체험 모드에서 화면과 기능을
                     확인할 수 있습니다.
@@ -527,6 +525,12 @@ export default function Dock() {
               </div>
             </section>
           )}
+          <MigrationPanel
+            account={store.backend === "drive" ? store.user?.id : undefined}
+            demo={store.demo}
+            pending={store.pendingCount}
+            onRefresh={store.backend === "drive" ? store.refresh : store.flush}
+          />
           <form
             className="quick-add"
             onSubmit={(e) => {
@@ -683,6 +687,7 @@ export default function Dock() {
                         </span>
                       ))}
                       <span>{date(idea.updated_at)}</span>
+                      {idea.provenance && <span>이전한 아이디어</span>}
                       {idea.images.length > 0 && (
                         <span>이미지 {idea.images.length}</span>
                       )}
@@ -804,6 +809,7 @@ export default function Dock() {
               idea={current}
               onChange={update}
               demo={store.demo}
+              drive={store.backend === "drive" && !store.demo}
               onError={store.setError}
               onZoom={setZoom}
               status={store.status}
@@ -845,10 +851,7 @@ export default function Dock() {
           >
             <div className="modal-title">
               <h2 id="settings-title">작업 공간 설정</h2>
-              <button
-                aria-label="설정 닫기"
-                onClick={() => setSettings(false)}
-              >
+              <button aria-label="설정 닫기" onClick={() => setSettings(false)}>
                 <X size={19} />
               </button>
             </div>
@@ -876,6 +879,27 @@ export default function Dock() {
             {!store.user && (
               <button className="primary" onClick={login}>
                 Google 로그인
+              </button>
+            )}
+            {store.user && store.backend === "drive" && (
+              <button className="settings-button" onClick={login}>
+                Google Drive 다시 연결
+              </button>
+            )}
+            {store.backend === "drive" && supabase && (
+              <button
+                className="settings-button"
+                onClick={async () => {
+                  const result = await supabase?.auth.signInWithOAuth({
+                    provider: "google",
+                    options: {
+                      redirectTo: `${location.origin}${location.pathname}`,
+                    },
+                  });
+                  if (result?.error) store.setError(result.error.message);
+                }}
+              >
+                이전 Supabase 계정 연결 · 데이터 조사용
               </button>
             )}
             <button className="settings-button" onClick={backup}>
@@ -917,10 +941,7 @@ export default function Dock() {
           aria-label="이미지 확대"
           onClick={() => setZoom(null)}
         >
-          <button
-            aria-label="이미지 확대 닫기"
-            onClick={() => setZoom(null)}
-          >
+          <button aria-label="이미지 확대 닫기" onClick={() => setZoom(null)}>
             <X />
           </button>
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -935,6 +956,7 @@ function Detail({
   idea,
   onChange,
   demo,
+  drive,
   onError,
   onZoom,
   status,
@@ -942,6 +964,7 @@ function Detail({
   idea: Idea;
   onChange: (idea: Idea) => void;
   demo: boolean;
+  drive: boolean;
   onError: (text: string) => void;
   onZoom: (url: string) => void;
   status: string;
@@ -964,6 +987,7 @@ function Detail({
   }
   useEffect(() => {
     let live = true;
+    const allocated: string[] = [];
     async function load() {
       const next: Record<string, string> = {};
       for (const image of idea.images) {
@@ -971,11 +995,15 @@ function Detail({
           next[image.id] = image.storage_path;
           continue;
         }
-        const result = await supabase?.storage
-          .from("idea-images")
-          .createSignedUrl(image.storage_path, 3600);
-        if (result?.error) onError(result.error.message);
-        if (result?.data) next[image.id] = result.data.signedUrl;
+        try {
+          const url = await imageUrl(image.storage_path);
+          allocated.push(url);
+          if (live) next[image.id] = url;
+          else URL.revokeObjectURL(url);
+        } catch (error) {
+          if (live)
+            onError(error instanceof Error ? error.message : String(error));
+        }
       }
       if (live) setUrls(next);
     }
@@ -984,6 +1012,7 @@ function Detail({
     return () => {
       live = false;
       clearInterval(interval);
+      allocated.forEach((url) => URL.revokeObjectURL(url));
     };
   }, [idea.images, demo, onError]);
   async function files(files: File[]) {
@@ -1011,6 +1040,8 @@ function Detail({
               reject(new Error("이미지를 읽지 못했습니다."));
             reader.readAsDataURL(file);
           });
+        } else if (drive) {
+          path = await uploadDriveImage(file);
         } else {
           if (!supabase) throw new Error("클라우드 연결이 필요합니다.");
           path = `${idea.user_id}/${idea.id}/${id}`;
