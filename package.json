@@ -8,8 +8,8 @@
   "scripts": {
     "preflight": "node scripts/preflight.mjs",
     "dev": "next dev",
-    "build": "node scripts/preview-guard.mjs && next build",
-    "start": "next start",
+    "build": "next build && node scripts/verify-static.mjs",
+    "start": "node scripts/serve-static.mjs",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",

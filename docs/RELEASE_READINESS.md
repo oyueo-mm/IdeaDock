@@ -1,5 +1,7 @@
 # Drive 전환 릴리스 준비
 
+> 이 문서는 GitHub Pages 전환 이전의 검증·Vercel 중단 이력입니다. 현재 공식 배포와 main 릴리스 정책은 [Pages 안내](PAGES.md)를 따릅니다. 아래 Vercel 설정 및 제한은 현재 실행 절차가 아닙니다.
+
 기능 브랜치: `feat/drive-safe-migration`. main 병합과 Production 배포는 이번 작업 범위가 아닙니다.
 
 ## 인증 UX 검토

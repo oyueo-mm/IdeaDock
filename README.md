@@ -2,7 +2,7 @@
 
 빠르게 기록하고, 다시 찾아보고, 하나씩 완성하는 개인 아이디어 작업 공간입니다.
 
-인증 UX 검토, 실제 동기화 검증과 Preview 준비 상태는 [릴리스 준비](docs/RELEASE_READINESS.md)를 확인하세요.
+공식 배포 플랫폼은 GitHub Pages입니다. 배포·OAuth 설정은 [Pages 안내](docs/PAGES.md), 이전 검증 기록은 [릴리스 준비](docs/RELEASE_READINESS.md)를 확인하세요.
 
 ## 실행
 
@@ -10,13 +10,13 @@ Node.js 24.x와 npm을 사용합니다. Windows PowerShell에서 실행 정책 �
 
 ```powershell
 npm.cmd ci
-Copy-Item .env.example .env.local
+if (-not (Test-Path .env.local)) { Copy-Item .env.example .env.local }
 npm.cmd run dev
 ```
 
-http://localhost:3000 에 접속합니다. 기본 저장 시스템은 **Google Drive + IndexedDB**입니다. `.env.local`에 `NEXT_PUBLIC_GOOGLE_CLIENT_ID`를 설정하면 Google 계정으로 연결할 수 있습니다. 연결 전에는 **체험 모드 열기**로 기존 UI와 편집 기능을 확인할 수 있습니다. 체험 데이터는 기존과 같은 localStorage 키에 보관하며 로그인 후에도 자동 업로드·삭제하지 않습니다.
+http://localhost:3000/IdeaDock/ 에 접속합니다. 기본 저장 시스템은 **Google Drive + IndexedDB**입니다. `.env.local`에 `NEXT_PUBLIC_GOOGLE_CLIENT_ID`를 설정하면 Google 계정으로 연결할 수 있습니다. 연결 전에는 **체험 모드 열기**로 기존 UI와 편집 기능을 확인할 수 있습니다. 체험 데이터는 기존과 같은 localStorage 키에 보관하며 로그인 후에도 자동 업로드·삭제하지 않습니다.
 
-Google OAuth 설정, 데이터 조사·이전·재시도·복구는 [안전한 이전 안내](docs/MIGRATION.md)를 확인하세요. 기존 Supabase 연결과 레거시 저장 코드는 유지합니다. [기존 설정 안내](docs/SETUP.md)는 Supabase 데이터 조사 및 롤백 시 사용합니다. 실제 클라우드 계정 설정이나 배포는 수행하지 않았습니다.
+Google OAuth 설정, 데이터 조사·이전·재시도·복구는 [안전한 이전 안내](docs/MIGRATION.md)를 확인하세요. 기존 Supabase 연결과 레거시 저장 코드는 유지합니다. [기존 설정 안내](docs/SETUP.md)는 Supabase 데이터 조사 및 롤백 시 사용합니다. 현재 배포 결과는 Pages 안내와 검증 기록을 참고하세요.
 
 ## 구현된 기능
 
@@ -77,6 +77,7 @@ docs/                      설정 절차와 검증 결과
 ## 검증
 
 ```powershell
+npm.cmd run build
 npm.cmd run typecheck
 npm.cmd test
 npx.cmd playwright install chromium
@@ -101,4 +102,4 @@ GitHub Actions가 타입 검사, 단위/DB 테스트, 빌드와 데스크톱·�
 
 GitHub 저장소: https://github.com/oyueo-mm/IdeaDock
 
-Vercel 배포 주소: 아직 없음
+공식 Pages 주소: https://oyueo-mm.github.io/IdeaDock/

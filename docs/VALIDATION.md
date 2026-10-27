@@ -2,6 +2,14 @@
 
 검증일: 2026-10-27 (Asia/Seoul)
 
+## GitHub Pages Static Export 전환
+
+기능 브랜치에서 `output: export`, `/IdeaDock` basePath, trailing slash, 최적화 서버 없는 이미지 설정을 적용했습니다. 정적 export와 호환되지 않는 `headers()` 및 Vercel 전용 설정·배포 명령·Preview 보호 코드를 제거했습니다. 사용하지 않는 로컬 Vercel OIDC 환경 항목만 제거했으며 기존 Google OAuth 설정·Drive 데이터·백업은 보존했습니다. npm 프로젝트에는 Vercel 전용 의존성이 없으며, Supabase 의존성은 레거시 데이터 조사·복구용으로 유지합니다.
+
+로컬 타입 검사와 52개 단위·회귀, 정적 파일 서버에서 기본 UI 16개와 모의 Drive 4개가 통과했습니다. 이전의 50개 데이터 회귀는 유지하고 Vercel 전용 2개를 export 경로 검사 2개로 교체했습니다. 실제 Next 서버 없이 `out/`에서 실행한 결과이며 HTML의 Next 정적 리소스 9개와 전체 정적 파일 32개를 검증했습니다. 브라우저 테스트의 데이터 저장·이미지·휴지통·새로고침·모의 OAuth/Drive 동작은 `/IdeaDock/` 아래에서 검사했습니다.
+
+GitHub Settings의 Pages 소스는 workflow로 설정했고, 기존 실제 OAuth Client ID를 Actions Variable로 등록했습니다. 사용자도 `https://oyueo-mm.github.io` 승인 원본 추가를 확인했습니다. 기능 브랜치는 다운로드용 artifact만 만들고 공식 사이트는 최신 main의 성공한 CI만 게시하도록 경계를 구성했습니다. 설정·서버 헤더 제한·공개 검증 절차는 [Pages 안내](PAGES.md)를 참조합니다. 원격 CI·main 병합·최초 공개 배포와 실제 공개 로그인 검증은 로컬 검증 이후에 실행하며, 실행 전에는 성공으로 집계하지 않습니다.
+
 ## 최종 두 세션 동기화 및 배포 준비 검증
 
 최종 로컬 결과: 단위·회귀 **52/52**, 타입 검사·빌드 통과, 기본 Playwright **16개 통과**(전용 모의 Drive 4개는 이 명령에서 제외), 별도 모의 Drive Playwright **4/4 통과**입니다. 52개에는 서버 이력 캐시 1개와 Preview 배포 경계 보호 2개 회귀 테스트가 포함됩니다.

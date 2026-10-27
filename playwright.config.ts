@@ -5,18 +5,20 @@ export default defineConfig({
   use: {
     baseURL:
       process.env.IDEADOCK_E2E_DRIVE === "1"
-        ? "http://127.0.0.1:3001"
-        : "http://127.0.0.1:3000",
+        ? "http://127.0.0.1:4174/IdeaDock/"
+        : "http://127.0.0.1:4173/IdeaDock/",
     trace: "retain-on-failure",
   },
   webServer: {
-    command: `npm run dev -- --hostname 127.0.0.1 --port ${process.env.IDEADOCK_E2E_DRIVE === "1" ? "3001" : "3000"}`,
+    command:
+      process.env.IDEADOCK_E2E_DRIVE === "1"
+        ? "npm run build && npm run start -- --port 4174"
+        : "npm run start -- --port 4173",
     url:
       process.env.IDEADOCK_E2E_DRIVE === "1"
-        ? "http://127.0.0.1:3001"
-        : "http://127.0.0.1:3000",
-    reuseExistingServer:
-      !process.env.CI && process.env.IDEADOCK_E2E_DRIVE !== "1",
+        ? "http://127.0.0.1:4174/IdeaDock/"
+        : "http://127.0.0.1:4173/IdeaDock/",
+    reuseExistingServer: false,
     env:
       process.env.IDEADOCK_E2E_DRIVE === "1"
         ? {

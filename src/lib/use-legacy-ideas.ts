@@ -341,7 +341,7 @@ export function useLegacyIdeas() {
       if (!supabase) throw new Error("기존 Supabase 연결 정보가 필요합니다.");
       const result = await supabase.auth.signInWithOAuth({
         provider: "google",
-        options: { redirectTo: location.origin },
+        options: { redirectTo: `${location.origin}${location.pathname}` },
       });
       if (result.error) throw result.error;
     },

@@ -1,4 +1,6 @@
-# IdeaDock 전용 클라우드 연결
+# 이전 Supabase 설정 참고
+
+현재 Google Drive 및 GitHub Pages 설정은 [Pages 안내](PAGES.md)를 사용하세요. 아래는 레거시 데이터 조사·복구를 위한 참고 기록입니다.
 
 현재 Supabase/Vercel 프로젝트는 생성하거나 연결하지 않았습니다. 아래 과정은 사용자의 계정에서 실행해야 합니다. 다른 프로젝트의 데이터베이스를 재사용하지 마세요.
 
@@ -67,29 +69,9 @@ powershell -File scripts/cloud-setup.ps1 -Action Migrate -ProjectRef YOUR_IDEADO
 5. Redirect URLs에 `http://localhost:3000`과 확정된 Vercel 배포 주소를 추가합니다. `127.0.0.1`로 접속한다면 해당 origin도 추가합니다. 임의의 모든 도메인을 허용하는 와일드카드는 사용하지 않습니다.
 6. `.env.local`을 설정한 뒤 개발 서버를 재시작합니다. Google 로그인 → 제목 한 줄 작성 → 새 브라우저/기기에서 같은 계정으로 로그인 → 데이터 조회·편집을 확인합니다.
 
-## 4. Vercel 프로젝트 및 GitHub 연결
+## 4. 공식 배포
 
-1. https://vercel.com 에 로그인하고 **Add New → Project**에서 `oyueo-mm/IdeaDock`를 Import합니다. GitHub 설치 권한은 이 저장소에 허용합니다.
-2. Framework Preset은 Next.js, Root Directory는 저장소 루트, 빌드 명령은 `npm run build`, 설치는 `npm ci`입니다. Node.js는 24.x를 사용합니다.
-3. Production과 필요한 Preview 환경에 앱용 공개 환경변수 2개를 설정합니다. 테스트 사용자 비밀번호는 Vercel에 넣지 않습니다.
-4. Deploy 후 실제 URL을 Supabase의 Site URL과 Redirect URLs에 등록합니다.
-5. 주소 또는 환경변수를 변경하면 재배포합니다. `NEXT_PUBLIC_` 값은 빌드 시 앱에 반영됩니다.
-6. main push는 프로덕션, PR은 Preview로 자동 연결됩니다. Preview에서 로그인하려면 해당 주소를 리디렉션 허용 목록에 등록해야 합니다.
-
-CLI 대안:
-
-```powershell
-npx.cmd vercel login
-npx.cmd vercel link
-npx.cmd vercel env add NEXT_PUBLIC_SUPABASE_URL production
-npx.cmd vercel env add NEXT_PUBLIC_SUPABASE_ANON_KEY production
-# Preview에도 필요하면 각 변수를 preview 환경으로 추가
-npx.cmd vercel
-# Preview와 로그인 검증 후
-npx.cmd vercel --prod
-```
-
-`scripts/cloud-setup.ps1 -Action Preview` / `-Action Production`도 사용할 수 있습니다. 해당 명령은 실제 배포를 수행하므로 연결한 프로젝트와 환경변수를 먼저 확인하세요. GitHub 자동 배포 연결은 Dashboard의 Git 설정에서 확인합니다.
+공식 배포는 GitHub Pages입니다. [Pages 설정과 배포 절차](PAGES.md)를 따릅니다. 이 문서의 나머지는 보존한 레거시 Supabase 설정 참고용입니다.
 
 ## 5. 실제 RLS·Storage 통합 테스트
 

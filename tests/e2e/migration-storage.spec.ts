@@ -4,7 +4,7 @@ import { makeIdea } from "../../src/lib/model";
 test("JSON preview can be edited, backed up and restored without overwriting the legacy demo", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("./");
   const existing = makeIdea("기존 데이터 유지", "demo");
   await page.evaluate(
     (idea) =>
@@ -35,15 +35,13 @@ test("JSON preview can be edited, backed up and restored without overwriting the
       },
     ],
   };
-  await page
-    .getByLabel("JSON 백업 파일 확인", { exact: true })
-    .setInputFiles({
-      name: "old-backup.json",
-      mimeType: "application/json",
-      buffer: Buffer.from(
-        JSON.stringify({ exported_at: "2025-01-01", ideas: [candidate] }),
-      ),
-    });
+  await page.getByLabel("JSON 백업 파일 확인", { exact: true }).setInputFiles({
+    name: "old-backup.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(
+      JSON.stringify({ exported_at: "2025-01-01", ideas: [candidate] }),
+    ),
+  });
   const preview = page.getByRole("textbox", { name: "가져오기 미리보기" });
   await expect(preview).toBeVisible();
   const value = JSON.parse(await preview.inputValue());
@@ -105,7 +103,7 @@ test("JSON preview can be edited, backed up and restored without overwriting the
 test("a corrupt demo cache is reported and preserved instead of being initialized away", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("./");
   const raw = '{"ideas": [broken original bytes';
   await page.evaluate(
     (value) => localStorage.setItem("ideadock:data:demo", value),

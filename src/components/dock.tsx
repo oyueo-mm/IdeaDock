@@ -892,7 +892,9 @@ export default function Dock() {
                 onClick={async () => {
                   const result = await supabase?.auth.signInWithOAuth({
                     provider: "google",
-                    options: { redirectTo: location.origin },
+                    options: {
+                      redirectTo: `${location.origin}${location.pathname}`,
+                    },
                   });
                   if (result?.error) store.setError(result.error.message);
                 }}

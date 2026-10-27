@@ -1,5 +1,7 @@
 # Google Drive 전환 및 안전한 이전
 
+현재 호스팅은 [GitHub Pages](PAGES.md)입니다. 로컬 앱 경로는 `/IdeaDock/`이며 저장소·백업·사용자 승인 절차는 그대로 유지합니다.
+
 작업 기준: `429b6c3`, 브랜치 `feat/drive-safe-migration`. 기존 main, Supabase SQL·Storage 정책·클라이언트는 변경하거나 삭제하지 않았습니다. 원본 저장소 삭제 API는 이전 절차에 없습니다.
 
 ## 연결 설정

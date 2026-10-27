@@ -214,11 +214,11 @@ test("approval, image backup, repeated migration and second-device reload", asyn
   page,
   context,
   browser,
-}) => {
+}, testInfo) => {
   const api = mockDrive();
   await api.attach(context);
   const raw = demoData();
-  await page.goto("/");
+  await page.goto("./");
   await page.evaluate(
     (value) => localStorage.setItem("ideadock:data:demo", value),
     raw,
@@ -272,7 +272,7 @@ test("approval, image backup, repeated migration and second-device reload", asyn
   try {
     await api.attach(other);
     const second = await other.newPage();
-    await second.goto("http://127.0.0.1:3001");
+    await second.goto(testInfo.project.use.baseURL!);
     await login(second);
     await expect(
       second.getByRole("article").filter({ hasText: "보존할 아이디어" }),
@@ -318,7 +318,7 @@ test("deferral preserves the original demo and lost upload replies can be retrie
   api.failSecond();
   await api.attach(context);
   const raw = demoData();
-  await page.goto("/");
+  await page.goto("./");
   await page.evaluate(
     (value) => localStorage.setItem("ideadock:data:demo", value),
     raw,

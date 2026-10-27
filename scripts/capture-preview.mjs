@@ -128,7 +128,7 @@ try {
     { ideas: rows, pending: {} },
   );
   const page = await context.newPage();
-  await page.goto(process.env.PREVIEW_URL || "http://127.0.0.1:3000");
+  await page.goto(process.env.PREVIEW_URL || "http://127.0.0.1:4173/IdeaDock/");
   await page.getByRole("button", { name: "체험 모드 열기" }).click();
   await page.locator(".idea-summary").filter({ hasText: titles[0] }).click();
   await page.getByRole("textbox", { name: "아이디어 본문" }).waitFor();
