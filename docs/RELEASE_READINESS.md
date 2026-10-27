@@ -44,4 +44,16 @@ Vercel의 `oyueo/ideadock` 전용 프로젝트를 만들고 이 작업 폴더를
 
 `vercel.json`으로 Next.js 프레임워크와 빌드·설치 명령을 명시했습니다. `.vercelignore`는 `.env*`, `.local/`, 브라우저 프로필, 복구 백업, `.git/`, 로컬 빌드 및 테스트 산출물을 제외합니다. CLI dry-run에서 이 파일들이 업로드되지 않음을 확인했습니다. [Vercel Preview 환경](https://vercel.com/docs/deployments/environments)
 
-확정된 Preview URL은 배포 완료 후 여기에 기록합니다. Google Cloud OAuth 웹 클라이언트의 **승인된 JavaScript 원본**에는 해당 URL의 `https://호스트명`만 추가해야 합니다. 경로·`/#idea=...`·와일드카드를 넣지 않습니다. 현재 token model은 Supabase callback을 사용하지 않습니다. 승인 원본 추가 전에는 Preview의 실제 Google 로그인을 성공으로 기록하지 않습니다. [Vercel 생성 URL](https://vercel.com/docs/deployments/generated-urls)
+### GitHub 결과
+
+앱 변경과 최초 검증 문서는 `e251e3094ca42788f2debf405522646d445535e2`로 커밋하고 [동일 이름의 기능 브랜치](https://github.com/oyueo-mm/IdeaDock/tree/feat/drive-safe-migration)에 일반 푸시했습니다. main은 `429b6c3`으로 유지합니다. 이어서 Preview 보호 장치와 최종 결과 문서를 같은 기능 브랜치에 추가합니다. 원격 CI 결과는 실행 링크에서 확인하며 로컬 통과 결과와 구분합니다.
+
+### Preview 차단과 복구
+
+`vercel deploy --target preview --scope oyueo --yes --json`으로 명시적 Preview를 요청했지만, 서버 결과와 `vercel inspect`에서 **target=production**이 확인됐습니다. 요청한 배포 경계와 달랐으므로 생성된 배포 `dpl_4gZ5vuEzvT7D6nqt2iUnfCtG9r5i` 하나를 즉시 삭제했습니다. 삭제 성공 및 `vercel list ideadock`의 활성 배포 0개를 확인했습니다. main·기존 다른 Vercel 프로젝트·Google Drive 데이터는 변경하지 않았습니다.
+
+Vercel 공식 저장소에도 새 프로젝트 첫 배포가 CLI·REST·비프로덕션 Git 브랜치에서 Production으로 분류되는 보고가 있습니다. 재시도나 Production 부트스트랩은 수행하지 않습니다. 현재 **사용 가능한 Preview URL은 없으며, Google 승인 JavaScript 원본에 새로 추가할 정확한 Preview 주소도 아직 확정할 수 없습니다.** 삭제된 배포 URL이나 Production 별칭을 Preview 원본으로 추가하지 마세요. [Vercel의 동일 문제 보고](https://github.com/vercel/vercel/issues/17069)
+
+`scripts/preview-guard.mjs`를 빌드 앞에 추가했습니다. `VERCEL_ENV=production` 또는 Vercel에서 환경이 불명확한 경우 Next 빌드 전에 실패합니다. 명시적 Preview와 로컬 빌드는 허용합니다. 장래 Production 배포는 별도의 승인 및 이 보호 정책 재검토가 필요합니다. 현재 최종 로컬 검증은 **52개 단위·회귀 테스트, 타입 검사, 빌드, 기본 브라우저 16개 및 모의 Drive 브라우저 4개 통과**입니다. 보호 장치는 별도 단위 테스트로 검사했으며 플랫폼의 잘못된 Production 생성 여부를 시험하기 위한 추가 배포는 하지 않았습니다.
+
+Vercel이 Production 부트스트랩 없이 첫 Preview를 생성할 수 있는 지원 경로를 제공한 뒤 주소를 확정해야 합니다. 이후 Google Cloud OAuth 웹 클라이언트의 **승인된 JavaScript 원본**에는 실제 `https://호스트명`만 추가합니다. 경로·`/#idea=...`·와일드카드를 넣지 않습니다. 현재 token model은 Supabase callback을 사용하지 않습니다. 승인 원본 추가 전에는 Preview의 실제 Google 로그인을 성공으로 기록하지 않습니다. [Vercel 생성 URL](https://vercel.com/docs/deployments/generated-urls)
