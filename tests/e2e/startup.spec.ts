@@ -28,7 +28,7 @@ test("signed-out UI hides empty counts, preserves resized panels and distinguish
       exact: true,
     });
     await expect(left).toHaveAttribute("aria-valuenow", "290");
-    await expect(page.locator(".topbar")).toHaveCSS("height", "54px");
+    await expect(page.locator(".topbar")).toHaveCSS("height", "40px");
   }
   await page.evaluate(() =>
     localStorage.setItem(

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ArrowDownUp,
   ArrowLeft,
@@ -128,6 +128,7 @@ export default function Dock() {
       setTag("");
       setMobileNav(false);
     },
+    onNewIdea: add,
   });
   explorer.updateRef.current = update;
   const settingsRef = useRef<HTMLElement>(null);
@@ -556,8 +557,8 @@ export default function Dock() {
         </header>
         <div className="main-content">
           {authenticated && (
-            <div className="page-title">
-              <div>
+            <div className="list-header">
+              <div className="list-title-row">
                 <h1>
                   {tag
                     ? `# ${tag}`
@@ -565,6 +566,46 @@ export default function Dock() {
                       ? "아이디어"
                       : nav.find((i) => i.id === filter)?.label}
                 </h1>
+                <label className="sort-field">
+                  <ArrowDownUp size={14} />
+                  <select
+                    aria-label="아이디어 정렬"
+                    value={sort}
+                    onChange={(e) => setSort(e.target.value)}
+                  >
+                    <option value="updated">최근 수정순</option>
+                    <option value="created">최근 생성순</option>
+                    <option value="oldest">오래된순</option>
+                    <option value="title">제목순</option>
+                  </select>
+                </label>
+              </div>
+              <div className="list-path-row">
+                <ExplorerBreadcrumb e={explorer} />
+                <div className="explorer-toolbar">
+                  <button onClick={() => explorer.createFolder()}>
+                    새 폴더
+                  </button>
+                  <button
+                    onClick={() => {
+                      explorer.setMobileMulti(!explorer.mobileMulti);
+                    }}
+                    aria-pressed={explorer.mobileMulti}
+                  >
+                    다중 선택
+                  </button>
+                  {explorer.lingering.size > 0 && (
+                    <button
+                      onClick={() => explorer.releaseOrder()}
+                      title="방금 완료 상태를 바꾼 항목을 이 목록의 조건에 맞게 정리합니다."
+                    >
+                      목록 정리 ({explorer.lingering.size})
+                    </button>
+                  )}
+                  {explorer.selected.size > 0 && (
+                    <span role="status">{explorer.selected.size}개 선택됨</span>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -587,23 +628,6 @@ export default function Dock() {
                 </button>
               </div>
             </section>
-          )}
-          {authenticated && (
-            <div className="list-tools">
-              <label className="sort-field">
-                <ArrowDownUp size={14} />
-                <select
-                  aria-label="아이디어 정렬"
-                  value={sort}
-                  onChange={(e) => setSort(e.target.value)}
-                >
-                  <option value="updated">최근 수정순</option>
-                  <option value="created">최근 생성순</option>
-                  <option value="oldest">오래된순</option>
-                  <option value="title">제목순</option>
-                </select>
-              </label>
-            </div>
           )}
           <div className="sync-alerts">
             {store.demo && demoNotice && (
@@ -677,21 +701,6 @@ export default function Dock() {
           </div>
           {authenticated && (
             <>
-              <ExplorerBreadcrumb e={explorer} />
-              <div className="explorer-toolbar">
-                <button onClick={() => explorer.createFolder()}>새 폴더</button>
-                <button
-                  onClick={() => {
-                    explorer.setMobileMulti(!explorer.mobileMulti);
-                  }}
-                  aria-pressed={explorer.mobileMulti}
-                >
-                  다중 선택
-                </button>
-                {explorer.selected.size > 0 && (
-                  <span role="status">{explorer.selected.size}개 선택됨</span>
-                )}
-              </div>
               {folderStore.error && (
                 <div className="error-banner" role="alert">
                   {folderStore.error}
@@ -934,6 +943,20 @@ function Detail({
   onRestore: () => void;
 }) {
   const titleRef = useRef<HTMLTextAreaElement>(null);
+  // The title is one line high when it is short and grows with its text, also
+  // when the panel is resized and the text wraps differently.
+  useLayoutEffect(() => {
+    const el = titleRef.current;
+    if (!el) return;
+    const fit = () => {
+      el.style.height = "auto";
+      el.style.height = `${el.scrollHeight}px`;
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    if (el.parentElement) observer.observe(el.parentElement);
+    return () => observer.disconnect();
+  }, [idea.title]);
   useEffect(() => {
     if (focusTitle) {
       titleRef.current?.focus();
@@ -1120,7 +1143,7 @@ function Detail({
         className="detail-title"
         aria-label="아이디어 제목 편집"
         value={idea.title}
-        rows={Math.min(6, Math.max(2, Math.ceil(idea.title.length / 19)))}
+        rows={1}
         onChange={(e) => patch({ title: e.target.value })}
         onBlur={() => {
           if (!latest.current.title.trim())
@@ -1194,6 +1217,75 @@ function Detail({
           onFiles={files}
           onZoom={onZoom}
         />
+      </section>
+      <section className="detail-section">
+        <div className="section-label">
+          <ImagePlus size={14} />
+          참고 이미지 <small>{idea.images.length}/12</small>
+          <button
+            aria-label="이미지 첨부"
+            disabled={uploading}
+            onClick={() => fileInput.current?.click()}
+          >
+            {uploading ? (
+              <LoaderCircle className="spin" size={15} />
+            ) : (
+              <Plus size={15} />
+            )}
+          </button>
+        </div>
+        <input
+          ref={fileInput}
+          type="file"
+          multiple
+          hidden
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          onChange={(e) => void files(Array.from(e.target.files || []))}
+        />
+        <div className="image-grid">
+          {idea.images.map((image) => (
+            <div key={image.id}>
+              {urls[image.id] ? (
+                <button onClick={() => onZoom(urls[image.id])}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={urls[image.id]} alt={image.original_filename} />
+                </button>
+              ) : (
+                <span>이미지 준비 중</span>
+              )}
+              <button
+                className="image-remove"
+                aria-label={`${image.original_filename} 이미지 삭제`}
+                onClick={() =>
+                  patch({
+                    images: idea.images.filter((i) => i.id !== image.id),
+                    content: removeImageContent(idea.content, image.id),
+                  })
+                }
+              >
+                <X size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+        <button
+          className="upload-area"
+          disabled={uploading}
+          onClick={() => fileInput.current?.click()}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault();
+            void files(Array.from(e.dataTransfer.files));
+          }}
+        >
+          <ImagePlus size={21} />
+          <span>
+            {uploading
+              ? "이미지 업로드 중…"
+              : "이미지를 끌어 놓거나 클릭해 첨부"}
+          </span>
+          <small>본문에 붙여넣기도 가능 · 최대 5MB</small>
+        </button>
       </section>
       <section className="detail-section">
         <div className="section-label">
@@ -1294,75 +1386,6 @@ function Detail({
             </div>
           </form>
         )}
-      </section>
-      <section className="detail-section">
-        <div className="section-label">
-          <ImagePlus size={14} />
-          참고 이미지 <small>{idea.images.length}/12</small>
-          <button
-            aria-label="이미지 첨부"
-            disabled={uploading}
-            onClick={() => fileInput.current?.click()}
-          >
-            {uploading ? (
-              <LoaderCircle className="spin" size={15} />
-            ) : (
-              <Plus size={15} />
-            )}
-          </button>
-        </div>
-        <input
-          ref={fileInput}
-          type="file"
-          multiple
-          hidden
-          accept="image/png,image/jpeg,image/webp,image/gif"
-          onChange={(e) => void files(Array.from(e.target.files || []))}
-        />
-        <div className="image-grid">
-          {idea.images.map((image) => (
-            <div key={image.id}>
-              {urls[image.id] ? (
-                <button onClick={() => onZoom(urls[image.id])}>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={urls[image.id]} alt={image.original_filename} />
-                </button>
-              ) : (
-                <span>이미지 준비 중</span>
-              )}
-              <button
-                className="image-remove"
-                aria-label={`${image.original_filename} 이미지 삭제`}
-                onClick={() =>
-                  patch({
-                    images: idea.images.filter((i) => i.id !== image.id),
-                    content: removeImageContent(idea.content, image.id),
-                  })
-                }
-              >
-                <X size={13} />
-              </button>
-            </div>
-          ))}
-        </div>
-        <button
-          className="upload-area"
-          disabled={uploading}
-          onClick={() => fileInput.current?.click()}
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={(e) => {
-            e.preventDefault();
-            void files(Array.from(e.dataTransfer.files));
-          }}
-        >
-          <ImagePlus size={21} />
-          <span>
-            {uploading
-              ? "이미지 업로드 중…"
-              : "이미지를 끌어 놓거나 클릭해 첨부"}
-          </span>
-          <small>본문에 붙여넣기도 가능 · 최대 5MB</small>
-        </button>
       </section>
     </div>
   );

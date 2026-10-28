@@ -1,6 +1,8 @@
 "use client";
 import {
   useEffect,
+  useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type MouseEvent,
@@ -31,6 +33,15 @@ import IdeaThumbnail from "./idea-thumbnail";
 type FolderStore = ReturnType<typeof useFolders>;
 const fid = (id: string) => `f:${id}`,
   iid = (id: string) => `i:${id}`;
+/** "blank": empty list area · "folder": one folder · "items": the selection. */
+type ContextMenu = {
+  x: number;
+  y: number;
+  kind: "blank" | "folder" | "items";
+  folder?: string;
+};
+const sameSet = (a: Set<string>, b: Set<string>) =>
+  a.size === b.size && [...a].every((id) => b.has(id));
 export function useExplorer({
   ideas,
   folderStore,
@@ -43,6 +54,7 @@ export function useExplorer({
   onError,
   onSelection,
   onNavigate,
+  onNewIdea,
 }: {
   ideas: Idea[];
   folderStore: FolderStore;
@@ -55,6 +67,7 @@ export function useExplorer({
   onError: (s: string) => void;
   onSelection: () => void;
   onNavigate: () => void;
+  onNewIdea: () => void;
 }) {
   const { folders } = folderStore;
   const [folderId, setFolderId] = useState<string | null | undefined>(
@@ -62,7 +75,7 @@ export function useExplorer({
     ),
     [selected, setSelected] = useState<Set<string>>(new Set()),
     [expanded, setExpanded] = useState<Set<string>>(new Set()),
-    [context, setContext] = useState<{ x: number; y: number } | null>(null),
+    [context, setContext] = useState<ContextMenu | null>(null),
     [moveOpen, setMoveOpen] = useState(false),
     [target, setTarget] = useState(""),
     [dragging, setDragging] = useState<string[]>([]),
@@ -115,46 +128,116 @@ export function useExplorer({
   );
   const trashed = (i: Idea) =>
     !!i.deleted_at || folderTrashed(folders, i.folder_id);
-  const visibleIdeas = selectIdeas(
-    ideas.map((i) =>
-      filter === "trash" && trashed(i) && !i.deleted_at
-        ? { ...i, deleted_at: "inherited" }
-        : i,
-    ),
-    filter,
-    tag,
-    "",
-    sort,
-  )
-    .filter(
-      (i) =>
-        (filter === "trash" || !trashed(i)) &&
-        (folderId === undefined || (i.folder_id ?? null) === folderId),
-    )
-    .map((i) => ideas.find((v) => v.id === i.id)!);
-  // A missing remote folder never makes an idea disappear from the root recovery view.
-  if (folderId === null)
-    for (const i of ideas)
-      if (
-        i.folder_id &&
-        !folders.some((f) => f.id === i.folder_id) &&
-        !i.deleted_at &&
-        !visibleIdeas.some((v) => v.id === i.id)
+  // Completing or reopening an idea bumps its updated_at, which would throw the
+  // row to the top of "최근 수정순" under the user's cursor. The order the user
+  // was looking at is therefore kept ("held") until the view itself changes:
+  // another sort, filter, tag or folder, or an explicit refresh.
+  const view = `${owner ?? ""}|${filter}|${tag}|${folderId === undefined ? "~" : (folderId ?? "")}|${sort}`;
+  const hold = useRef<{ view: string; ids: string[]; pinned: string } | null>(
+    null,
+  );
+  const [holdTick, setHoldTick] = useState(0);
+  useEffect(() => {
+    hold.current = null;
+  }, [view]);
+  const { visibleIdeas, lingering } = useMemo(() => {
+    const byId = new Map(ideas.map((i) => [i.id, i]));
+    const candidates = (as: Filter) =>
+      selectIdeas(
+        ideas.map((i) =>
+          filter === "trash" && trashed(i) && !i.deleted_at
+            ? { ...i, deleted_at: "inherited" }
+            : i,
+        ),
+        as,
+        tag,
+        "",
+        sort,
       )
-        visibleIdeas.push(i);
-  const visibleFolders = folders
-    .filter((f) =>
-      filter === "trash"
-        ? folderTrashed(folders, f.id)
-        : folderId !== undefined &&
-          !folderTrashed(folders, f.id) &&
-          f.parent_id === folderId,
-    )
-    .sort((a, b) => a.name.localeCompare(b.name, "ko"));
-  const order = [
-    ...visibleFolders.map((f) => fid(f.id)),
-    ...visibleIdeas.map((i) => iid(i.id)),
-  ];
+        .filter(
+          (i) =>
+            (filter === "trash" || !trashed(i)) &&
+            (folderId === undefined || (i.folder_id ?? null) === folderId),
+        )
+        .map((i) => byId.get(i.id)!);
+    const list = candidates(filter);
+    // A missing remote folder never makes an idea disappear from the root recovery view.
+    if (folderId === null) {
+      const shown = new Set(list.map((i) => i.id)),
+        known = new Set(folders.map((f) => f.id));
+      for (const i of ideas)
+        if (
+          i.folder_id &&
+          !known.has(i.folder_id) &&
+          !i.deleted_at &&
+          !shown.has(i.id)
+        )
+          list.push(i);
+    }
+    const held = hold.current?.view === view ? hold.current : null;
+    if (!held) return { visibleIdeas: list, lingering: new Set<string>() };
+    const shown = new Set(list.map((i) => i.id)),
+      heldIds = new Set(held.ids);
+    // In the open/completed filters a just-toggled idea no longer matches. It
+    // stays put, marked, so the next click lands where the user aimed.
+    const extra =
+      filter === "active" || filter === "completed"
+        ? candidates("all").filter((i) => heldIds.has(i.id) && !shown.has(i.id))
+        : [];
+    const pool = [...list, ...extra];
+    const pinned = pool
+      .filter((i) => i.is_pinned)
+      .map((i) => i.id)
+      .sort()
+      .join();
+    if (pinned !== held.pinned) {
+      hold.current = null; // pinning is meant to move an idea to the top
+      return { visibleIdeas: list, lingering: new Set<string>() };
+    }
+    const poolById = new Map(pool.map((i) => [i.id, i]));
+    return {
+      visibleIdeas: [
+        ...list.filter((i) => !heldIds.has(i.id)),
+        ...held.ids
+          .filter((id) => poolById.has(id))
+          .map((id) => poolById.get(id)!),
+      ],
+      lingering: new Set(extra.map((i) => i.id)),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ideas, folders, filter, tag, sort, folderId, view, holdTick]);
+  function holdOrder() {
+    const pinned = visibleIdeas
+      .filter((i) => i.is_pinned)
+      .map((i) => i.id)
+      .sort()
+      .join();
+    hold.current = { view, ids: visibleIdeas.map((i) => i.id), pinned };
+  }
+  function releaseOrder() {
+    hold.current = null;
+    setHoldTick((n) => n + 1);
+  }
+  const visibleFolders = useMemo(
+    () =>
+      folders
+        .filter((f) =>
+          filter === "trash"
+            ? folderTrashed(folders, f.id)
+            : folderId !== undefined &&
+              !folderTrashed(folders, f.id) &&
+              f.parent_id === folderId,
+        )
+        .sort((a, b) => a.name.localeCompare(b.name, "ko")),
+    [folders, filter, folderId],
+  );
+  const order = useMemo(
+    () => [
+      ...visibleFolders.map((f) => fid(f.id)),
+      ...visibleIdeas.map((i) => iid(i.id)),
+    ],
+    [visibleFolders, visibleIdeas],
+  );
   const selectedFolders = folders.filter((f) => selected.has(fid(f.id))),
     selectedIdeas = ideas.filter((i) => selected.has(iid(i.id)));
   function clear() {
@@ -227,6 +310,11 @@ export function useExplorer({
       onError(e instanceof Error ? e.message : String(e));
     }
   }
+  const canCreate =
+    !!owner &&
+    folderStore.ready &&
+    filter !== "trash" &&
+    !(folderId && folderTrashed(folders, folderId));
   function createFolder(parent = folderId ?? null) {
     attempt(() => {
       if (!owner) throw new Error("먼저 로그인하세요.");
@@ -362,6 +450,7 @@ export function useExplorer({
         if (!keepSelection) clear();
         return;
       }
+      if (action === "complete" || action === "active") holdOrder();
       for (const i of selectedIdeas)
         update({
           ...i,
@@ -529,11 +618,16 @@ export function useExplorer({
       onDragEnd: dragEnd,
       onContextMenu: (e: MouseEvent) => {
         e.preventDefault();
-        if(touchMode)return;
-        if (!selected.has(id)) announce(new Set([id]), true);
+        if (touchMode) return;
+        // Right-clicking part of the selection keeps the whole selection.
+        const inSelection = selected.has(id);
+        if (!inSelection) announce(new Set([id]), true);
+        const count = inSelection ? selected.size : 1;
         setContext({
-          x: Math.min(e.clientX, window.innerWidth - 190),
-          y: Math.min(e.clientY, window.innerHeight - 320),
+          x: e.clientX,
+          y: e.clientY,
+          kind: id.startsWith("f:") && count === 1 ? "folder" : "items",
+          folder: id.startsWith("f:") ? id.slice(2) : undefined,
         });
       },
       onPointerDown: (e: PointerEvent) => pointerDown(e, id),
@@ -555,6 +649,14 @@ export function useExplorer({
     setExpanded,
     context,
     setContext,
+    openBlankMenu: (x: number, y: number) => {
+      if (!touchMode) setContext({ x, y, kind: "blank" });
+    },
+    canCreate,
+    newIdea: onNewIdea,
+    holdOrder,
+    releaseOrder,
+    lingering,
     moveOpen,
     setMoveOpen,
     target,
@@ -718,6 +820,200 @@ export function ExplorerBreadcrumb({ e }: { e: Explorer }) {
   );
 }
 
+type Gesture = {
+  x: number;
+  y: number;
+  cx: number;
+  cy: number;
+  base: Set<string>;
+  ctrl: boolean;
+  items: { id: string; x: number; y: number; w: number; h: number }[];
+  last: Set<string>;
+  moved: boolean;
+  frame?: number;
+};
+
+function ExplorerContextMenu({ e }: { e: Explorer }) {
+  const menu = useRef<HTMLDivElement>(null);
+  const c = e.context!;
+  // Place the menu at the pointer, then pull it back inside the viewport.
+  useLayoutEffect(() => {
+    const el = menu.current;
+    if (!el) return;
+    const size = el.getBoundingClientRect();
+    el.style.left = `${Math.max(8, Math.min(c.x, window.innerWidth - size.width - 8))}px`;
+    el.style.top = `${Math.max(8, Math.min(c.y, window.innerHeight - size.height - 8))}px`;
+    el.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus();
+  }, [c.x, c.y, c.kind, c.folder]);
+  useEffect(() => {
+    const close = (ev: Event) => {
+      if (!menu.current?.contains(ev.target as Node)) e.setContext(null);
+    };
+    const escape = (ev: globalThis.KeyboardEvent) => {
+      if (ev.key !== "Escape") return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      e.setContext(null);
+    };
+    const dismiss = () => e.setContext(null);
+    document.addEventListener("pointerdown", close, true);
+    document.addEventListener("keydown", escape, true);
+    window.addEventListener("resize", dismiss);
+    window.addEventListener("blur", dismiss);
+    return () => {
+      document.removeEventListener("pointerdown", close, true);
+      document.removeEventListener("keydown", escape, true);
+      window.removeEventListener("resize", dismiss);
+      window.removeEventListener("blur", dismiss);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const done = (action: () => void) => () => {
+    e.setContext(null);
+    action();
+  };
+  const folder = c.folder ? e.folders.find((f) => f.id === c.folder) : null;
+  const folderGone = !folder || folderTrashed(e.folders, folder.id);
+  const anyTrashed = e.selectedTrashed;
+  return (
+    <div
+      ref={menu}
+      className="explorer-context"
+      role="menu"
+      aria-label={c.kind === "blank" ? "목록 작업" : "항목 작업"}
+      style={{ left: c.x, top: c.y }}
+      onContextMenu={(ev) => ev.preventDefault()}
+      onKeyDown={(ev) => {
+        const items = [
+          ...ev.currentTarget.querySelectorAll<HTMLElement>(
+            '[role="menuitem"]:not(:disabled)',
+          ),
+        ];
+        const at = items.indexOf(document.activeElement as HTMLElement);
+        const go = (index: number) => {
+          ev.preventDefault();
+          items[(index + items.length) % items.length]?.focus();
+        };
+        if (ev.key === "ArrowDown") go(at + 1);
+        else if (ev.key === "ArrowUp") go(at < 0 ? -1 : at - 1);
+        else if (ev.key === "Home") go(0);
+        else if (ev.key === "End") go(-1);
+        else if (ev.key === "Tab") ev.preventDefault();
+      }}
+    >
+      {c.kind === "blank" && (
+        <>
+          <button
+            role="menuitem"
+            disabled={!e.canCreate}
+            onClick={done(() => e.createFolder())}
+          >
+            새 폴더
+          </button>
+          <button
+            role="menuitem"
+            disabled={!e.canCreate}
+            onClick={done(() => e.newIdea())}
+          >
+            새 아이디어
+          </button>
+        </>
+      )}
+      {c.kind === "folder" && (
+        <>
+          <button
+            role="menuitem"
+            disabled={folderGone}
+            onClick={done(() => e.navigate(c.folder))}
+          >
+            열기
+          </button>
+          <button
+            role="menuitem"
+            disabled={folderGone || !e.owner}
+            onClick={done(() => e.createFolder(c.folder))}
+          >
+            이 폴더 안에 새 폴더
+          </button>
+          <button
+            role="menuitem"
+            disabled={folderGone}
+            onClick={done(() => e.rename())}
+          >
+            이름 변경
+          </button>
+          <button
+            role="menuitem"
+            disabled={folderGone}
+            onClick={done(() => e.setMoveOpen(true))}
+          >
+            이동
+          </button>
+          <button
+            role="menuitem"
+            onClick={done(() => e.bulk(anyTrashed ? "restore" : "trash"))}
+          >
+            {anyTrashed ? "복원" : "삭제"}
+          </button>
+        </>
+      )}
+      {c.kind === "items" && (
+        <>
+          <button
+            role="menuitem"
+            disabled={e.selected.size !== 1 || anyTrashed}
+            onClick={done(() => {
+              if (e.selectedFolders.length === 1)
+                e.navigate(e.selectedFolders[0].id);
+              else if (e.selectedIdeas.length === 1)
+                e.announce(new Set([iid(e.selectedIdeas[0].id)]));
+            })}
+          >
+            열기
+          </button>
+          <button
+            role="menuitem"
+            disabled={e.selected.size !== 1 || anyTrashed}
+            onClick={done(() => e.rename())}
+          >
+            이름 변경
+          </button>
+          <button
+            role="menuitem"
+            disabled={anyTrashed}
+            onClick={done(() => e.setMoveOpen(true))}
+          >
+            이동
+          </button>
+          <button
+            role="menuitem"
+            disabled={!e.selectedIdeas.length || anyTrashed}
+            onClick={done(() => e.bulk("complete"))}
+          >
+            완료 처리
+          </button>
+          <button
+            role="menuitem"
+            disabled={!e.selectedIdeas.length || anyTrashed}
+            onClick={done(() => e.bulk("pin"))}
+          >
+            고정
+          </button>
+          <button
+            role="menuitem"
+            onClick={done(() => e.bulk(anyTrashed ? "restore" : "trash"))}
+          >
+            {anyTrashed ? "복원" : "삭제"}
+          </button>
+          <button role="menuitem" onClick={done(() => {})}>
+            닫기
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function ExplorerList({
   e,
   update,
@@ -726,20 +1022,15 @@ export function ExplorerList({
   update: (i: Idea) => void;
 }) {
   const list = useRef<HTMLDivElement>(null),
-    gesture = useRef<{
-      x: number;
-      y: number;
-      cx: number;
-      cy: number;
-      base: Set<string>;
-      ctrl: boolean;
-    } | null>(null);
+    gesture = useRef<Gesture | null>(null);
   const [rect, setRect] = useState<{
     x: number;
     y: number;
     w: number;
     h: number;
   } | null>(null);
+  // Selection follows the rectangle live. Row boxes were measured once when the
+  // drag began (rows do not move during it), so a move costs no layout reads.
   const paint = () => {
     const g = gesture.current,
       el = list.current;
@@ -753,38 +1044,53 @@ export function ExplorerList({
         w: Math.abs(x - g.x),
         h: Math.abs(y - g.y),
       };
-    if (r.w + r.h < 5) return;
+    if (!g.moved && r.w + r.h < 5) return; // still a click
+    if (!g.moved) {
+      g.moved = true;
+      g.frame = requestAnimationFrame(autoScroll);
+    }
     setRect(r);
     const next = new Set(g.ctrl ? g.base : []);
-    for (const row of el.querySelectorAll<HTMLElement>("[data-item-id]")) {
-      const b = row.getBoundingClientRect(),
-        rx = b.left - bounds.left + el.scrollLeft,
-        ry = b.top - bounds.top + el.scrollTop;
+    for (const item of g.items)
       if (
-        rx < r.x + r.w &&
-        rx + b.width > r.x &&
-        ry < r.y + r.h &&
-        ry + b.height > r.y
+        item.x < r.x + r.w &&
+        item.x + item.w > r.x &&
+        item.y < r.y + r.h &&
+        item.y + item.h > r.y
       ) {
-        const id = row.dataset.itemId!;
-        if (g.ctrl && g.base.has(id)) next.delete(id);
-        else next.add(id);
+        if (g.ctrl && g.base.has(item.id)) next.delete(item.id);
+        else next.add(item.id);
       }
+    if (!sameSet(next, g.last)) {
+      g.last = next;
+      e.announce(next, true);
     }
-    e.announce(next, true);
   };
-  useEffect(() => {
-    if (!rect) return;
-    const timer = setInterval(() => {
-      const el = list.current,
-        g = gesture.current;
-      if (!el || !g) return;
-      const b = el.getBoundingClientRect();
-      if (g.cy > b.bottom - 35) el.scrollTop += 12;
-      else if (g.cy < b.top + 35) el.scrollTop -= 12;
-    }, 40);
-    return () => clearInterval(timer);
-  }, [!!rect]);
+  // Scrolls faster the further the pointer is beyond the list's top or bottom.
+  const autoScroll = () => {
+    const g = gesture.current,
+      el = list.current;
+    if (!g || !el) return;
+    const bounds = el.getBoundingClientRect(),
+      zone = 48,
+      top = bounds.top + zone,
+      bottom = bounds.bottom - zone;
+    if (g.cy > bottom)
+      el.scrollTop += Math.min(28, 2 + ((g.cy - bottom) / zone) * 26);
+    else if (g.cy < top)
+      el.scrollTop -= Math.min(28, 2 + ((top - g.cy) / zone) * 26);
+    g.frame = requestAnimationFrame(autoScroll);
+  };
+  const preventSelection = (ev: Event) => ev.preventDefault();
+  const finish = () => {
+    const g = gesture.current;
+    if (g?.frame) cancelAnimationFrame(g.frame);
+    gesture.current = null;
+    setRect(null);
+    document.body.classList.remove("marquee-active");
+    document.removeEventListener("selectstart", preventSelection);
+  };
+  useEffect(() => finish, []); // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <div
       ref={list}
@@ -796,44 +1102,67 @@ export function ExplorerList({
       onScroll={() => {
         if (gesture.current) paint();
       }}
+      onContextMenu={(ev) => {
+        // Rows open their own menu; only empty space opens the list menu.
+        if ((ev.target as HTMLElement).closest("[data-item-id],[role=menu]"))
+          return;
+        ev.preventDefault();
+        e.openBlankMenu(ev.clientX, ev.clientY);
+      }}
       onPointerDown={(ev) => {
         if (
           ev.button !== 0 ||
           ev.pointerType === "touch" ||
           (ev.target as HTMLElement).closest(
-            "[data-item-id],button,input,a,select",
+            "[data-item-id],button,input,a,select,textarea,[role=menu]",
           )
         )
           return;
-        list.current?.focus();
-        const b = ev.currentTarget.getBoundingClientRect();
+        const el = ev.currentTarget;
+        el.focus({ preventScroll: true });
+        const bounds = el.getBoundingClientRect();
         gesture.current = {
-          x: ev.clientX - b.left + ev.currentTarget.scrollLeft,
-          y: ev.clientY - b.top + ev.currentTarget.scrollTop,
+          x: ev.clientX - bounds.left + el.scrollLeft,
+          y: ev.clientY - bounds.top + el.scrollTop,
           cx: ev.clientX,
           cy: ev.clientY,
           base: new Set(e.selected),
           ctrl: ev.ctrlKey || ev.metaKey,
+          last: new Set(e.selected),
+          moved: false,
+          items: [...el.querySelectorAll<HTMLElement>("[data-item-id]")].map(
+            (row) => {
+              const b = row.getBoundingClientRect();
+              return {
+                id: row.dataset.itemId!,
+                x: b.left - bounds.left + el.scrollLeft,
+                y: b.top - bounds.top + el.scrollTop,
+                w: b.width,
+                h: b.height,
+              };
+            },
+          ),
         };
-        ev.currentTarget.setPointerCapture(ev.pointerId);
+        // No browser text selection or image drag may start under the rectangle.
+        document.body.classList.add("marquee-active");
+        document.addEventListener("selectstart", preventSelection);
+        window.getSelection()?.removeAllRanges();
+        el.setPointerCapture(ev.pointerId);
         ev.preventDefault();
       }}
       onPointerMove={(ev) => {
-        if (gesture.current) {
-          gesture.current.cx = ev.clientX;
-          gesture.current.cy = ev.clientY;
-          paint();
-        }
+        const g = gesture.current;
+        if (!g) return;
+        g.cx = ev.clientX;
+        g.cy = ev.clientY;
+        paint();
       }}
       onPointerUp={() => {
-        if (gesture.current && !rect) e.clear();
-        gesture.current = null;
-        setRect(null);
+        const g = gesture.current;
+        if (g && !g.moved && !g.ctrl) e.clear();
+        finish();
       }}
-      onPointerCancel={() => {
-        gesture.current = null;
-        setRect(null);
-      }}
+      onPointerCancel={finish}
     >
       <div className="explorer-items">
         {e.visibleFolders.map((f) => (
@@ -871,7 +1200,7 @@ export function ExplorerList({
           <article
             data-item-id={iid(idea.id)}
             key={idea.id}
-            className={`idea-row ${e.selected.has(iid(idea.id)) ? "is-selected" : ""}`}
+            className={`idea-row ${e.selected.has(iid(idea.id)) ? "is-selected" : ""} ${e.lingering.has(idea.id) ? "is-lingering" : ""}`}
             {...e.rowProps(iid(idea.id))}
           >
             <input
@@ -879,9 +1208,10 @@ export function ExplorerList({
               type="checkbox"
               aria-label={`${idea.title} 완료`}
               checked={idea.is_completed}
-              onChange={(ev) =>
-                update({ ...idea, is_completed: ev.target.checked })
-              }
+              onChange={(ev) => {
+                e.holdOrder();
+                update({ ...idea, is_completed: ev.target.checked });
+              }}
             />
             <button
               className="idea-summary"
@@ -890,8 +1220,14 @@ export function ExplorerList({
             >
               <span className="idea-title">
                 {idea.is_pinned && <Pin size={12} />} {idea.title}
-                {idea.is_completed && (
-                  <small className="completed-label">완료</small>
+                {e.lingering.has(idea.id) ? (
+                  <small className="completed-label">
+                    {idea.is_completed ? "완료로 이동됨" : "미완료로 이동됨"}
+                  </small>
+                ) : (
+                  idea.is_completed && (
+                    <small className="completed-label">완료</small>
+                  )
                 )}
               </span>
               <span className="idea-preview">
@@ -972,13 +1308,13 @@ export function ExplorerList({
           </div>
         )}
         <div className="explorer-blank" aria-hidden="true" />
-        {rect && (
-          <div
-            className="selection-marquee"
-            style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
-          />
-        )}
       </div>
+      {rect && (
+        <div
+          className="selection-marquee"
+          style={{ left: rect.x, top: rect.y, width: rect.w, height: rect.h }}
+        />
+      )}
       {e.dragging.length > 0 && (
         <div className="drag-status" role="status">
           {e.dragging.length}개 이동 중 ·{" "}
@@ -990,86 +1326,7 @@ export function ExplorerList({
             : "대상 폴더를 선택하세요"}
         </div>
       )}
-      {e.context && (
-        <div
-          className="explorer-context"
-          role="menu"
-          aria-label="항목 작업"
-          style={{ left: e.context.x, top: e.context.y }}
-          onKeyDown={e.keys}
-        >
-          <button
-            role="menuitem"
-            disabled={e.selected.size !== 1 || e.selectedTrashed}
-            onClick={() => {
-              if (e.selectedFolders.length === 1)
-                e.navigate(e.selectedFolders[0].id);
-              else if (e.selectedIdeas.length === 1)
-                e.announce(new Set([iid(e.selectedIdeas[0].id)]));
-              e.setContext(null);
-            }}
-          >
-            열기
-          </button>
-          <button
-            role="menuitem"
-            disabled={e.selected.size !== 1 || e.selectedTrashed}
-            onClick={() => {
-              e.rename();
-              e.setContext(null);
-            }}
-          >
-            이름 변경
-          </button>
-          <button
-            role="menuitem"
-            disabled={
-              e.selectedFolders.some((f) => folderTrashed(e.folders, f.id)) ||
-              e.selectedIdeas.some(
-                (i) => i.deleted_at || folderTrashed(e.folders, i.folder_id),
-              )
-            }
-            onClick={() => {
-              e.setMoveOpen(true);
-              e.setContext(null);
-            }}
-          >
-            이동
-          </button>
-          <button
-            role="menuitem"
-            disabled={!e.selectedIdeas.length || e.selectedTrashed}
-            onClick={() => {
-              e.bulk("complete");
-              e.setContext(null);
-            }}
-          >
-            완료 처리
-          </button>
-          <button
-            role="menuitem"
-            disabled={!e.selectedIdeas.length || e.selectedTrashed}
-            onClick={() => {
-              e.bulk("pin");
-              e.setContext(null);
-            }}
-          >
-            고정
-          </button>
-          <button
-            role="menuitem"
-            onClick={() => {
-              e.bulk(e.selectedTrashed ? "restore" : "trash");
-              e.setContext(null);
-            }}
-          >
-            {e.selectedTrashed ? "복원" : "삭제"}
-          </button>
-          <button role="menuitem" onClick={() => e.setContext(null)}>
-            닫기
-          </button>
-        </div>
-      )}
+      {e.context && <ExplorerContextMenu e={e} />}
     </div>
   );
 }

@@ -12,3 +12,6 @@ supabase/.branches/
 next-env.d.ts
 .local/
 .vercel
+
+# Local benchmark output (npm run bench)
+/bench-results/

@@ -14,9 +14,9 @@ import {
   disconnectDrive,
   DriveAuthError,
   DriveRepository,
+  driveRepositoryFor,
   driveSessionAccount,
   forgetDriveUser,
-  GoogleDrive,
   GoogleUser,
   loadGoogle,
   driveConfigured,
@@ -28,6 +28,7 @@ import {
 } from "./drive";
 import { useLegacyIdeas } from "./use-legacy-ideas";
 import { waitForFolderWrites } from "./folder-sync-gate";
+import { afterPaint } from "./paint";
 
 type Pending = { idea: Idea; parent: string | null; seq: number };
 type Cache = {
@@ -58,6 +59,10 @@ export function useDriveIdeas() {
   const owner = useRef<string | null>(null);
   const cache = useRef<Cache>({ ideas: [], pending: {}, heads: {} });
   const repo = useRef<DriveRepository | null>(null);
+  // The rows last applied to the screen, so an unchanged remote costs nothing.
+  const applied = useRef<{ rows: unknown; revision: number } | null>(null);
+  const cycle = useRef<Promise<void> | null>(null),
+    again = useRef(false);
   const epoch = useRef(0),
     revision = useRef(0),
     seq = useRef(0);
@@ -104,6 +109,13 @@ export function useDriveIdeas() {
       account !== owner.current
     )
       return;
+    // Same revisions as last time and nothing edited since: skip the rebuild,
+    // the re-render and the full IndexedDB snapshot write.
+    if (
+      applied.current?.rows === rows &&
+      applied.current.revision === revision.current
+    )
+      return;
     const pending = cache.current.pending;
     const next: Idea[] = rows.map((r) => pending[r.idea.id]?.idea ?? r.idea);
     for (const p of Object.values(pending))
@@ -124,6 +136,7 @@ export function useDriveIdeas() {
     ]);
     cache.current.ideas = next;
     publish();
+    applied.current = { rows, revision: revision.current };
     await persist();
   }, [persist, publish]);
   const flush = useCallback(async () => {
@@ -225,13 +238,33 @@ export function useDriveIdeas() {
   useEffect(() => {
     if (user) rememberDriveUser(user);
   }, [user]);
+  // One sync at a time: callers that arrive meanwhile share it and ask for one
+  // more pass, instead of each downloading the same revisions in parallel.
+  const sync = useCallback((): Promise<void> => {
+    if (cycle.current) {
+      again.current = true;
+      return cycle.current;
+    }
+    const run = (async () => {
+      try {
+        do {
+          again.current = false;
+          await flush();
+          await refresh();
+        } while (again.current);
+      } finally {
+        // Cleared in the same tick the loop decides to stop: a caller arriving
+        // later starts a new cycle instead of joining one that is finishing and
+        // whose extra pass would never run.
+        cycle.current = null;
+      }
+    })();
+    cycle.current = run;
+    return run;
+  }, [flush, refresh]);
   useEffect(() => {
-    if (connected)
-      void (async () => {
-        await flush();
-        await refresh();
-      })().catch(report);
-  }, [connected, flush, refresh, report]);
+    if (connected) void sync().catch(report);
+  }, [connected, sync, report]);
   useEffect(() => {
     const account = demo ? "demo" : (user?.id ?? null);
     const generation = ++epoch.current;
@@ -241,14 +274,13 @@ export function useDriveIdeas() {
     initialized.current = false;
     cache.current = { ideas: [], pending: {}, heads: {} };
     branches.current = {};
+    applied.current = null;
     setConflicts([]);
     publish();
     setError("");
     setStatus("");
     repo.current =
-      account && account !== "demo"
-        ? new DriveRepository(account, new GoogleDrive(account))
-        : null;
+      account && account !== "demo" ? driveRepositoryFor(account) : null;
     if (!account) return;
     void (async () => {
       try {
@@ -275,22 +307,23 @@ export function useDriveIdeas() {
         initialized.current = true;
         if (account === "demo") setStatus("체험 모드 · 이 브라우저에만 저장");
         else {
-          await flush();
-          await refresh();
+          // Show the cached list first; verification and Drive follow.
+          await afterPaint();
+          if (epoch.current !== generation) return;
+          await sync();
         }
       } catch (e) {
         if (epoch.current === generation) report(e);
       }
     })();
-  }, [user?.id, demo, flush, refresh, publish, report]);
+  }, [user?.id, demo, sync, publish, report]);
   useEffect(() => {
-    const sync = () => {
-      void (async () => {
-        await flush();
-        await refresh();
-      })().catch(report);
+    // A hidden tab neither polls nor competes with the visible one; it catches
+    // up as soon as it is shown again.
+    const run = () => {
+      if (!document.hidden) void sync().catch(report);
     };
-    const interval = setInterval(sync, 15000);
+    const interval = setInterval(run, 15000);
     const leave = (event: BeforeUnloadEvent) => {
       if (
         owner.current !== "demo" &&
@@ -300,15 +333,17 @@ export function useDriveIdeas() {
         event.returnValue = "";
       }
     };
-    window.addEventListener("online", sync);
+    window.addEventListener("online", run);
+    document.addEventListener("visibilitychange", run);
     window.addEventListener("beforeunload", leave);
     return () => {
       clearInterval(interval);
       if (timer.current) clearTimeout(timer.current);
-      window.removeEventListener("online", sync);
+      window.removeEventListener("online", run);
+      document.removeEventListener("visibilitychange", run);
       window.removeEventListener("beforeunload", leave);
     };
-  }, [flush, refresh, report]);
+  }, [sync, report]);
   const update = useCallback(
     (idea: Idea) => {
       if (
@@ -432,15 +467,13 @@ export function useDriveIdeas() {
             "미저장 초안이 있습니다. 원래 계정으로 다시 연결한 후 저장하세요.",
           );
         }
-        await flush();
-        await refresh();
+        await sync();
         return;
       }
       await persist();
       const next = await connectDrive(hint);
       if (next.id === user?.id && !demo) {
-        await flush();
-        await refresh();
+        await sync();
       } else {
         setDemo(false);
         setUser(next);

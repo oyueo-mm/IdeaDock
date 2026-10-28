@@ -91,13 +91,14 @@ npx.cmd playwright install chromium
 npm.cmd run test:e2e
 npm.cmd run test:e2e:drive # 모의 OAuth/Drive, 승인·재시도·별도 브라우저 조회
 npm.cmd run build
+npm.cmd run bench # 로딩 성능 측정(모의 Drive). 결과 해석은 docs/PERFORMANCE.md
 # 전용 Supabase 프로젝트와 테스트 계정 2개 연결 후:
 npm.cmd run test:security
 ```
 
 GitHub Actions가 타입 검사, 단위/DB 테스트, 빌드와 데스크톱·모바일 Chromium E2E를 수행합니다. 실제 Google OAuth 및 Supabase Storage 통합 테스트는 외부 프로젝트가 필요하므로 별도입니다. 자동 접근성 검사는 수동 키보드/스크린 리더 검증이나 WCAG 인증을 대신하지 않습니다.
 
-실행 결과와 확인하지 못한 항목은 [검증 기록](docs/VALIDATION.md)과 [이전 안내](docs/MIGRATION.md)를 참고하세요. 모의 API 검증은 실제 Google OAuth·Drive 또는 실제 두 기기 검증을 의미하지 않습니다.
+로딩 성능 측정과 개선 내용은 [성능 기록](docs/PERFORMANCE.md)에 있습니다. 실행 결과와 확인하지 못한 항목은 [검증 기록](docs/VALIDATION.md)과 [이전 안내](docs/MIGRATION.md)를 참고하세요. 모의 API 검증은 실제 Google OAuth·Drive 또는 실제 두 기기 검증을 의미하지 않습니다.
 
 ## 남은 작업
 

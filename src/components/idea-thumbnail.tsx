@@ -17,6 +17,7 @@ export default function IdeaThumbnail({
   const [loaded, setLoaded] = useState<{ path: string; url: string } | null>(
     null,
   );
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     if (!button.current || typeof IntersectionObserver === "undefined") {
       setVisible(true);
@@ -38,6 +39,7 @@ export default function IdeaThumbnail({
     if (!visible) return;
     let live = true;
     let allocated: string | undefined;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     void imageUrl(image.storage_path)
       .then((url) => {
         if (!live) {
@@ -48,13 +50,21 @@ export default function IdeaThumbnail({
         setLoaded({ path: image.storage_path, url });
       })
       .catch(() => {
-        if (live) setLoaded(null);
+        if (!live) return;
+        setLoaded(null);
+        // A dropped connection or a rate limit is usually brief: try again.
+        if (attempt < 3)
+          retry = setTimeout(
+            () => setAttempt(attempt + 1),
+            1500 * 2 ** attempt,
+          );
       });
     return () => {
       live = false;
+      clearTimeout(retry);
       if (allocated) URL.revokeObjectURL(allocated);
     };
-  }, [image.storage_path, visible]);
+  }, [image.storage_path, visible, attempt]);
   const url = loaded?.path === image.storage_path ? loaded.url : undefined;
   return (
     <button
