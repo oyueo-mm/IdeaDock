@@ -1,4 +1,6 @@
 import type { Idea } from "./model";
+import { type Folder, validateFolders, validateWorkspace } from "./folders";
+import { FolderRepository } from "./folder-repository";
 import { canonical, digest, imageNodes, validateIdeas } from "./integrity";
 import { KeyValueStore, localDb } from "./local-db";
 import { DriveRepository } from "./drive";
@@ -7,11 +9,12 @@ export type ImportSource = {
   id: string;
   label: string;
   ideas: Idea[];
+  folders?: Folder[];
   raw?: unknown;
 };
 export type BackupImage = { path: string; data: string; sha256: string };
 export type MigrationBackup = {
-  schema: "ideadock-migration-v1";
+  schema: "ideadock-migration-v1" | "ideadock-migration-v2";
   id: string;
   sources: ImportSource[];
   images: BackupImage[];
@@ -31,7 +34,10 @@ export interface ImportAdapter {
 }
 export function jsonSources(value: unknown, source = "json"): ImportSource[] {
   const object = value as Partial<MigrationBackup> & { ideas?: unknown };
-  if (object?.schema === "ideadock-migration-v1") {
+  if (
+    object?.schema === "ideadock-migration-v1" ||
+    object?.schema === "ideadock-migration-v2"
+  ) {
     if (!Array.isArray(object.sources) || !Array.isArray(object.images))
       throw new Error("손상된 이전 백업입니다.");
     for (const s of object.sources) validateIdeas(s.ideas);
@@ -57,6 +63,8 @@ export const importAdapters: ImportAdapter[] = [jsonImport];
 
 function validateSources(sources: ImportSource[]) {
   const ids = new Set<string>();
+  const ideaIds = new Map<string, string>(),
+    folderIds = new Map<string, string>();
   for (const source of sources) {
     if (
       !source ||
@@ -68,6 +76,21 @@ function validateSources(sources: ImportSource[]) {
       throw new Error("이전 저장소 식별자 또는 이름이 잘못되었습니다.");
     ids.add(source.id);
     validateIdeas(source.ideas);
+    validateWorkspace(source.ideas, source.folders ?? []);
+    for (const i of source.ideas) {
+      const value = canonical(i),
+        old = ideaIds.get(i.id);
+      if (old && old !== value)
+        throw new Error("동일 ID의 서로 다른 원본이 있습니다.");
+      ideaIds.set(i.id, value);
+    }
+    for (const f of source.folders ?? []) {
+      const value = canonical(f),
+        old = folderIds.get(f.id);
+      if (old && old !== value)
+        throw new Error("동일 ID의 서로 다른 폴더 원본이 있습니다.");
+      folderIds.set(f.id, value);
+    }
   }
 }
 
@@ -78,7 +101,9 @@ export async function prepareBackup(
   db: KeyValueStore | null = localDb,
 ): Promise<MigrationBackup> {
   const snapshot: ImportSource[] = [];
-  for (const source of structuredClone(sources.filter((s) => s.ideas.length))) {
+  for (const source of structuredClone(
+    sources.filter((s) => s.ideas.length || s.folders?.length),
+  )) {
     validateSources([source]);
     const existing = snapshot.find((s) => s.id === source.id);
     if (!existing) {
@@ -90,6 +115,16 @@ export async function prepareBackup(
       if (previous && canonical(previous) !== canonical(idea))
         throw new Error(`동일 저장소에 서로 다른 원본이 있습니다: ${idea.id}`);
       if (!previous) existing.ideas.push(idea);
+    }
+    if (source.folders?.length) {
+      const folders = new Map((existing.folders ?? []).map((f) => [f.id, f]));
+      for (const f of source.folders) {
+        const old = folders.get(f.id);
+        if (old && canonical(old) !== canonical(f))
+          throw new Error("서로 다른 폴더 원본입니다.");
+        folders.set(f.id, f);
+      }
+      existing.folders = [...folders.values()];
     }
     existing.raw = { snapshots: [existing.raw ?? null, source.raw ?? null] };
   }
@@ -122,7 +157,9 @@ export async function prepareBackup(
   const payload = { sources: snapshot, images };
   const id = await digest(canonical(payload));
   const backup: MigrationBackup = {
-    schema: "ideadock-migration-v1",
+    schema: snapshot.some((s) => s.folders?.length)
+      ? "ideadock-migration-v2"
+      : "ideadock-migration-v1",
     id,
     ...payload,
   };
@@ -140,7 +177,9 @@ export async function validateBackup(
   decode: (data: string) => Promise<Blob>,
 ) {
   if (
-    backup.schema !== "ideadock-migration-v1" ||
+    !["ideadock-migration-v1", "ideadock-migration-v2"].includes(
+      backup.schema,
+    ) ||
     !Array.isArray(backup.images) ||
     !Array.isArray(backup.sources)
   )
@@ -178,6 +217,21 @@ export async function restoreDemoBackup(
   const cached = original ? JSON.parse(original) : { ideas: [], pending: {} };
   validateIdeas(cached.ideas);
   const next: Idea[] = structuredClone(cached.ideas);
+  const folderKey = "ideadock:folders:demo:v2";
+  const originalFolders = storage.getItem(folderKey);
+  const folderCache = originalFolders
+    ? JSON.parse(originalFolders)
+    : { folders: [], pending: {}, heads: {} };
+  validateFolders(folderCache.folders);
+  const nextFolders: Folder[] = structuredClone(folderCache.folders);
+  for (const source of backup.sources)
+    for (const value of source.folders ?? []) {
+      const f = { ...value, user_id: "demo" };
+      const old = nextFolders.find((x) => x.id === f.id);
+      if (old && canonical(old) !== canonical(f))
+        throw new Error("복구 폴더 ID 충돌");
+      if (!old) nextFolders.push(f);
+    }
   for (const value of Object.values(cached.pending ?? {}) as { idea: Idea }[]) {
     validateIdeas([value.idea]);
     const index = next.findIndex((i) => i.id === value.idea.id);
@@ -207,8 +261,18 @@ export async function restoreDemoBackup(
       }
     }
   validateIdeas(next);
+  validateWorkspace(next, nextFolders);
   // Preserve a recoverable copy of the exact demo cache before any merge.
   if (original) storage.setItem(`ideadock:recovery:${backup.id}`, original);
+  if (originalFolders)
+    storage.setItem(`ideadock:folder-recovery:${backup.id}`, originalFolders);
+  // All folders precede ideas; interrupted recovery can leave extra folders,
+  // never an idea referring to a folder that was not durably written.
+  if (nextFolders.length)
+    storage.setItem(
+      folderKey,
+      JSON.stringify({ ...folderCache, folders: nextFolders }),
+    );
   storage.setItem(
     "ideadock:data:demo",
     JSON.stringify({ ...cached, ideas: next }),
@@ -247,6 +311,31 @@ export async function migrate(
       new Blob([canonical(backup)], { type: "application/json" }),
     );
     const imageMap = new Map<string, string>();
+    const folderRepo = new FolderRepository(repo);
+    const importedFolders = backup.sources.flatMap((s) =>
+      (s.folders ?? []).map((f) => ({ ...f, user_id: repo.account })),
+    );
+    if (importedFolders.length) {
+      const unique = [
+        ...new Map(importedFolders.map((f) => [f.id, f])).values(),
+      ];
+      validateFolders(unique);
+      const history = await folderRepo.revisions();
+      // append complete immutable records; validation above checks the whole snapshot.
+      for (const f of unique) {
+        const old = history.filter((r) => r.revision.folder.id === f.id);
+        if (
+          old.length &&
+          !old.some((r) => canonical(r.revision.folder) === canonical(f))
+        )
+          throw new Error("기존 Drive 폴더와 ID가 겹칩니다.");
+        if (!old.length) await folderRepo.append(f, null);
+      }
+      const actual = await folderRepo.revisions(true);
+      for (const f of unique)
+        if (!actual.some((r) => canonical(r.revision.folder) === canonical(f)))
+          throw new Error("폴더 이전 검증 실패");
+    }
     for (const image of backup.images) {
       const { hash } = await repo.put("image", await decode(image.data));
       if (hash !== image.sha256)

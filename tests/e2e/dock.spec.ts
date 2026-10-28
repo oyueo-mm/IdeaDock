@@ -175,6 +175,7 @@ test("removed inputs and shortcuts, data menu, backup and offline notice", async
     "JSON 백업",
     "JSON 가져오기",
     "기존 데이터 찾기",
+    "Word 가져오기",
   ]);
   await expect(
     page.locator(".sidebar").getByText(/IndexedDB|Supabase|무결성/),

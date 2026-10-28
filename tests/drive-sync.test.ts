@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { Idea } from "../src/lib/model";
 import { makeIdea } from "../src/lib/model";
+import { registerFolderWrites } from "../src/lib/folder-sync-gate";
 
 const state = vi.hoisted(() => ({
   rows: [] as { idea: Idea; head: string; conflicts: [] }[],
@@ -79,6 +80,30 @@ async function setup() {
   return hook;
 }
 describe("Drive autosave and local recovery", () => {
+  it("keeps idea drafts local until pending folders have been durably synced", async () => {
+    const { result } = await setup();
+    let available = false;
+    const stop = registerFolderWrites("google:alice", async () => {
+      if (!available) throw new Error("folder offline");
+    });
+    try {
+      act(() => {
+        result.current.create("folder-dependent draft");
+      });
+      await act(async () => result.current.flush());
+      expect(state.save).not.toHaveBeenCalled();
+      expect(result.current.pendingCount).toBe(1);
+      expect(state.disk.get("google:alice:cache")).toMatchObject({
+        ideas: [{ title: "folder-dependent draft" }],
+      });
+      available = true;
+      await act(async () => result.current.flush());
+      expect(result.current.pendingCount).toBe(0);
+      expect(state.rows[0].idea.title).toBe("folder-dependent draft");
+    } finally {
+      stop();
+    }
+  });
   it("saves drafts to account-scoped IndexedDB before remote upload", async () => {
     const { result } = await setup();
     act(() => {

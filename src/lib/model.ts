@@ -10,6 +10,9 @@ export type IdeaImage = {
   original_filename: string;
 };
 export type Idea = {
+  // Optional: never normalize old documents before checking their revision hash.
+  folder_id?: string | null;
+  imports?: { file_hash: string; item_id: string }[];
   id: string;
   user_id: string;
   title: string;

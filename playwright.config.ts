@@ -1,23 +1,24 @@
 import { defineConfig, devices } from "@playwright/test";
+const port = Number(
+  process.env.IDEADOCK_E2E_PORT ||
+    (process.env.IDEADOCK_E2E_DRIVE === "1" ? "4174" : "4173"),
+);
+if (!Number.isInteger(port) || port < 1024 || port > 65535)
+  throw new Error("Invalid IdeaDock E2E port");
+const baseURL = `http://127.0.0.1:${port}/IdeaDock/`;
 export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: true,
   use: {
-    baseURL:
-      process.env.IDEADOCK_E2E_DRIVE === "1"
-        ? "http://127.0.0.1:4174/IdeaDock/"
-        : "http://127.0.0.1:4173/IdeaDock/",
+    baseURL,
     trace: "retain-on-failure",
   },
   webServer: {
     command:
       process.env.IDEADOCK_E2E_DRIVE === "1"
-        ? "npm run build && npm run start -- --port 4174"
-        : "npm run start -- --port 4173",
-    url:
-      process.env.IDEADOCK_E2E_DRIVE === "1"
-        ? "http://127.0.0.1:4174/IdeaDock/"
-        : "http://127.0.0.1:4173/IdeaDock/",
+        ? `npm run build && npm run start -- --port ${port}`
+        : `npm run start -- --port ${port}`,
+    url: baseURL,
     reuseExistingServer: false,
     env:
       process.env.IDEADOCK_E2E_DRIVE === "1"

@@ -5,6 +5,7 @@ const child = spawn(
     "node_modules/@playwright/test/cli.js",
     "test",
     "tests/e2e/drive-migration.spec.ts",
+    "tests/e2e/workspace-drive.spec.ts",
     ...process.argv.slice(2),
   ],
   {

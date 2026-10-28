@@ -35,12 +35,14 @@ export default function MigrationPanel({
   pending,
   onRefresh,
   onBackup,
+  wordImport,
 }: {
   account?: string;
   demo: boolean;
   pending: number;
   onRefresh: () => Promise<void>;
   onBackup: () => Promise<void>;
+  wordImport?: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -68,7 +70,11 @@ export default function MigrationPanel({
   currentAccount.current = account;
   const sources = [
     ...(dialog === "legacy"
-      ? inspection.flatMap((i) => (i.source?.ideas.length ? [i.source] : []))
+      ? inspection.flatMap((i) =>
+          i.source && (i.source.ideas.length || i.source.folders?.length)
+            ? [i.source]
+            : [],
+        )
       : []),
     ...imports,
   ];
@@ -163,6 +169,7 @@ export default function MigrationPanel({
           >
             기존 데이터 찾기
           </button>
+          {wordImport}
         </div>
       )}
       {dialog &&
@@ -287,7 +294,12 @@ export default function MigrationPanel({
                         setRecoveryMessage("");
                         void task(async () => {
                           const value = JSON.parse(await file.text());
-                          if (value.schema === "ideadock-migration-v1") {
+                          if (
+                            [
+                              "ideadock-migration-v1",
+                              "ideadock-migration-v2",
+                            ].includes(value.schema)
+                          ) {
                             await validateBackup(value, readImage);
                             await localDb.set(`backup:${value.id}`, value);
                             setBackup(value);
@@ -380,7 +392,8 @@ export default function MigrationPanel({
                           setDownloaded(false);
                         }}
                       />
-                      {source.label} · {source.ideas.length}개 · 휴지통{" "}
+                      {source.label} · {source.ideas.length}개 · 폴더{" "}
+                      {source.folders?.length ?? 0}개 · 휴지통{" "}
                       {source.ideas.filter((i) => i.deleted_at).length}개 ·
                       이미지{" "}
                       {source.ideas.reduce((n, i) => n + i.images.length, 0)}개
@@ -388,7 +401,15 @@ export default function MigrationPanel({
                   ))}
                   <button
                     className="settings-button"
-                    disabled={busy || count === 0}
+                    disabled={
+                      busy ||
+                      (count === 0 &&
+                        !sources.some(
+                          (s, index) =>
+                            selected.includes(optionKey(s, index)) &&
+                            s.folders?.length,
+                        ))
+                    }
                     onClick={() =>
                       void task(async () => {
                         const prepared = await prepareBackup(
@@ -458,7 +479,15 @@ export default function MigrationPanel({
                           }
                           개
                         </strong>{" "}
-                        · 이미지 원본 {backup.images.length}개 ·{" "}
+                        · 폴더{" "}
+                        {
+                          new Set(
+                            backup.sources.flatMap((s) =>
+                              (s.folders ?? []).map((f) => f.id),
+                            ),
+                          ).size
+                        }
+                        개 · 이미지 원본 {backup.images.length}개 ·{" "}
                         {account
                           ? `대상 계정: ${account}`
                           : "Google 로그인 후 이전할 수 있습니다."}
