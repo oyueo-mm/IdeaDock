@@ -315,10 +315,13 @@ export default function Dock() {
       />
     );
   }
-  async function login() {
+  async function login(switchAccount = false) {
     try {
       if (store.backend === "drive")
-        await store.login(!store.demo && folderStore.pendingCount > 0);
+        await store.login(
+          !store.demo && folderStore.pendingCount > 0,
+          switchAccount,
+        );
       else await store.login();
     } catch (error) {
       store.setError(error instanceof Error ? error.message : String(error));
@@ -354,6 +357,11 @@ export default function Dock() {
     }
   }
   const authenticated = !!store.user || store.demo;
+  const reconnect =
+    store.backend === "drive" &&
+    !!store.user &&
+    !store.demo &&
+    !store.connected;
   return (
     <div
       className="app-shell"
@@ -560,11 +568,11 @@ export default function Dock() {
               </div>
             </div>
           )}
-          {!authenticated && (
+          {!authenticated && store.ready && (
             <section className="welcome">
               <p>Google Drive에 연결하여 아이디어를 동기화하세요.</p>
               <div className="welcome-actions">
-                <button className="primary" onClick={login}>
+                <button className="primary" onClick={() => login()}>
                   Google로 시작하기
                 </button>
                 <button
@@ -616,16 +624,27 @@ export default function Dock() {
                 오프라인입니다. 연결이 복구되면 동기화를 재시도합니다.
               </div>
             )}
+            {reconnect && (
+              <div className="sync-notice reconnect-notice" role="status">
+                <span>
+                  Google Drive 연결이 필요합니다. 변경 내용은 이 기기에
+                  보관됩니다.
+                </span>
+                <button onClick={() => login()}>Drive 다시 연결</button>
+              </div>
+            )}
             {authenticated && !store.demo && store.pendingCount > 0 && (
               <div className="sync-notice" role="status">
                 Drive에 저장되지 않은 변경 사항 {store.pendingCount}개
               </div>
             )}
-            {/확인 필요|재시도|대기 중/.test(store.status) && !store.error && (
-              <div className="sync-notice" role="status">
-                {store.status}
-              </div>
-            )}
+            {/확인 필요|재시도|대기 중/.test(store.status) &&
+              !store.error &&
+              !reconnect && (
+                <div className="sync-notice" role="status">
+                  {store.status}
+                </div>
+              )}
             {store.error && (
               <div className="error-banner" role="alert">
                 <span>{store.error}</span>
@@ -816,14 +835,19 @@ export default function Dock() {
                   : "로그인되지 않음")}
             </p>
             {!store.user && (
-              <button className="primary" onClick={login}>
+              <button className="primary" onClick={() => login()}>
                 Google 로그인
               </button>
             )}
             {store.user && store.backend === "drive" && (
-              <button className="settings-button" onClick={login}>
-                Google Drive 다시 연결
-              </button>
+              <>
+                <button className="settings-button" onClick={() => login()}>
+                  Google Drive 다시 연결
+                </button>
+                <button className="settings-button" onClick={() => login(true)}>
+                  다른 Google 계정으로 전환
+                </button>
+              </>
             )}
             {store.backend === "drive" && supabase && (
               <button

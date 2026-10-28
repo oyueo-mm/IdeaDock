@@ -6,6 +6,7 @@ const child = spawn(
     "test",
     "tests/e2e/drive-migration.spec.ts",
     "tests/e2e/workspace-drive.spec.ts",
+    "tests/e2e/auth-persistence.spec.ts",
     ...process.argv.slice(2),
   ],
   {

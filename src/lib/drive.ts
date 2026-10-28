@@ -21,6 +21,7 @@ type GoogleIdentity = {
         scope: string;
         callback: (response: TokenReply) => void;
         error_callback: (error: { type: string }) => void;
+        login_hint?: string;
       }): { requestAccessToken(options: { prompt: string }): void };
     };
   };
@@ -40,8 +41,111 @@ export const driveCacheKey = (account: string) =>
   driveSpace === "appDataFolder"
     ? `${account}:cache`
     : `${account}:cache:drive.file`;
-let session: { token: string; expires: number; user: GoogleUser } | undefined;
+type Session = { token: string; expires: number; user: GoogleUser };
+// Auth persistence (security review in docs/AUTH.md):
+// - accountKey (localStorage) keeps only the non-secret identity of the last
+//   workspace, so cached drafts can open offline and reconnects skip the
+//   account chooser. Explicit sign-out removes it.
+// - sessionKey (sessionStorage) keeps the short-lived access token so a reload
+//   in the same tab stays connected. It is per tab, never outlives Google's
+//   expires_in (<= 1 hour), and is dropped on sign-out, 401 or account mismatch.
+const accountKey = "ideadock:drive-account";
+const sessionKey = "ideadock:drive-session";
+let session: Session | undefined;
+let restored = false;
 let loading: Promise<void> | undefined;
+let expiry: ReturnType<typeof setTimeout> | undefined;
+const listeners = new Set<() => void>();
+export class DriveAuthError extends Error {
+  constructor() {
+    super(
+      "Google Drive 연결이 필요합니다. 다시 연결하면 기기에 보관된 변경 내용을 저장합니다.",
+    );
+  }
+}
+function isUser(value: unknown): value is GoogleUser {
+  const user = value as GoogleUser | null;
+  return (
+    typeof user?.id === "string" &&
+    user.id.startsWith("google:") &&
+    typeof user.email === "string" &&
+    typeof user.user_metadata?.full_name === "string"
+  );
+}
+function storage(kind: "localStorage" | "sessionStorage") {
+  try {
+    return typeof window === "undefined" ? undefined : window[kind];
+  } catch {
+    return undefined;
+  }
+}
+function read(kind: "localStorage" | "sessionStorage", key: string) {
+  try {
+    return JSON.parse(storage(kind)?.getItem(key) || "null") as unknown;
+  } catch {
+    return null;
+  }
+}
+export function rememberedDriveUser(): GoogleUser | null {
+  const value = read("localStorage", accountKey);
+  return isUser(value) ? value : null;
+}
+export function rememberDriveUser(user: GoogleUser) {
+  const { id, email, user_metadata } = user;
+  try {
+    storage("localStorage")?.setItem(
+      accountKey,
+      JSON.stringify({ id, email, user_metadata }),
+    );
+  } catch {
+    // Without storage the workspace simply asks to sign in after a reload.
+  }
+}
+// quiet: called from a render-time snapshot, where listeners must not fire.
+function setSession(next: Session | undefined, quiet = false) {
+  session = next;
+  if (expiry) clearTimeout(expiry);
+  expiry = undefined;
+  try {
+    if (next)
+      storage("sessionStorage")?.setItem(sessionKey, JSON.stringify(next));
+    else storage("sessionStorage")?.removeItem(sessionKey);
+  } catch {
+    // The in-memory session still works for this page.
+  }
+  if (next)
+    expiry = setTimeout(
+      () => setSession(undefined),
+      Math.min(next.expires - Date.now(), 2 ** 31 - 1),
+    );
+  if (!quiet) listeners.forEach((listener) => listener());
+}
+function current() {
+  if (!restored && typeof window !== "undefined") {
+    restored = true;
+    const saved = read("sessionStorage", sessionKey) as Session | null;
+    if (
+      saved &&
+      typeof saved.token === "string" &&
+      typeof saved.expires === "number" &&
+      saved.expires > Date.now() &&
+      isUser(saved.user) &&
+      saved.user.id === rememberedDriveUser()?.id
+    )
+      setSession(saved, true);
+    else if (saved) setSession(undefined, true);
+  }
+  if (session && session.expires <= Date.now()) setSession(undefined, true);
+  return session;
+}
+/** Account id of the usable access token, or null when a reconnect is needed. */
+export function driveSessionAccount() {
+  return current()?.user.id ?? null;
+}
+export function subscribeDriveSession(listener: () => void) {
+  listeners.add(listener);
+  return () => void listeners.delete(listener);
+}
 export function loadGoogle() {
   return (loading ??= new Promise<void>((resolve, reject) => {
     if (window.google) return resolve();
@@ -56,10 +160,18 @@ export function loadGoogle() {
     document.head.appendChild(script);
   }));
 }
-export async function connectDrive(): Promise<GoogleUser> {
+/**
+ * Must run from a user gesture: Google's token model opens a popup and has no
+ * refresh token. With a hint, a returning user who already consented gets a
+ * token without the account chooser; without one, the chooser is shown.
+ */
+export async function connectDrive(
+  options: { hint?: GoogleUser } = {},
+): Promise<GoogleUser> {
   if (!driveConfigured)
     throw new Error("Google OAuth 클라이언트 ID 설정이 필요합니다.");
   await loadGoogle();
+  const hint = options.hint?.id.slice("google:".length);
   const reply = await new Promise<TokenReply>((resolve, reject) => {
     window
       .google!.accounts.oauth2.initTokenClient({
@@ -67,8 +179,9 @@ export async function connectDrive(): Promise<GoogleUser> {
         scope: `openid email profile ${driveScope}`,
         callback: (r) => (r.error ? reject(new Error(r.error)) : resolve(r)),
         error_callback: (e) => reject(new Error(`Google 로그인: ${e.type}`)),
+        ...(hint ? { login_hint: hint } : {}),
       })
-      .requestAccessToken({ prompt: "select_account" });
+      .requestAccessToken({ prompt: hint ? "" : "select_account" });
   });
   if (!reply.scope.split(" ").includes(driveScope))
     throw new Error("Drive 저장 권한에 동의해야 연결할 수 있습니다.");
@@ -88,18 +201,29 @@ export async function connectDrive(): Promise<GoogleUser> {
     email: profile.email,
     user_metadata: { full_name: profile.name },
   };
-  session = {
+  setSession({
     token: reply.access_token,
-    expires: Date.now() + reply.expires_in * 1000 - 30000,
+    expires: Date.now() + Math.min(reply.expires_in, 3600) * 1000 - 30000,
     user,
-  };
+  });
   return user;
 }
+/** Drops the access token. The remembered workspace stays for a reconnect. */
 export function disconnectDrive() {
-  session = undefined;
+  restored = true;
+  setSession(undefined);
+}
+/** Sign-out: forget the token and the remembered workspace on this device. */
+export function forgetDriveUser() {
+  disconnectDrive();
+  try {
+    storage("localStorage")?.removeItem(accountKey);
+  } catch {
+    // Nothing to forget.
+  }
 }
 export function driveAccount() {
-  return session?.user.id;
+  return current()?.user.id;
 }
 export type RemoteFile = {
   id: string;
@@ -118,21 +242,20 @@ export class GoogleDrive implements ImmutableRemote {
   private folderPromise?: Promise<string>;
   constructor(readonly account: string) {}
   private async request(path: string, init: RequestInit = {}, upload = false) {
-    if (
-      !session ||
-      session.user.id !== this.account ||
-      session.expires <= Date.now()
-    )
-      throw new Error(
-        "Google Drive에 다시 로그인해 주세요. 초안과 이전 진행 상황은 보존됩니다.",
-      );
+    const active = current();
+    if (!active || active.user.id !== this.account) throw new DriveAuthError();
     const response = await fetch(
       `https://www.googleapis.com/${upload ? "upload/" : ""}drive/v3/${path}`,
       {
         ...init,
-        headers: { ...init.headers, Authorization: `Bearer ${session.token}` },
+        headers: { ...init.headers, Authorization: `Bearer ${active.token}` },
       },
     );
+    if (response.status === 401) {
+      // Revoked or expired early: forget the token, keep the local drafts.
+      if (session === active) setSession(undefined);
+      throw new DriveAuthError();
+    }
     if (!response.ok) {
       const detail = await response.json().catch(() => null);
       const reason = detail?.error?.errors?.[0]?.reason;
@@ -442,7 +565,10 @@ export class DriveRepository {
     row.head = hash;
   }
 }
+// Without a token this still names the remembered workspace, so cached images
+// and drafts stay readable; network requests then raise DriveAuthError.
 export function activeDriveRepository() {
-  if (!session) throw new Error("Google Drive 연결이 필요합니다.");
-  return new DriveRepository(session.user.id, new GoogleDrive(session.user.id));
+  const account = current()?.user.id ?? rememberedDriveUser()?.id;
+  if (!account) throw new Error("Google Drive 연결이 필요합니다.");
+  return new DriveRepository(account, new GoogleDrive(account));
 }

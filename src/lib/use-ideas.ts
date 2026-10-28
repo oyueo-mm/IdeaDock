@@ -1,18 +1,30 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { Idea, makeIdea } from "./model";
 import { validateIdeas } from "./integrity";
 import { localDb } from "./local-db";
 import {
   connectDrive,
   disconnectDrive,
+  DriveAuthError,
   DriveRepository,
+  driveSessionAccount,
+  forgetDriveUser,
   GoogleDrive,
   GoogleUser,
   loadGoogle,
   driveConfigured,
   driveCacheKey,
+  rememberDriveUser,
+  rememberedDriveUser,
   Revision,
+  subscribeDriveSession,
 } from "./drive";
 import { useLegacyIdeas } from "./use-legacy-ideas";
 import { waitForFolderWrites } from "./folder-sync-gate";
@@ -23,9 +35,22 @@ type Cache = {
   pending: Record<string, Pending>;
   heads: Record<string, string>;
 };
+/** Account id holding a usable Drive token; null while a reconnect is needed. */
+export function useDriveSession() {
+  return useSyncExternalStore(
+    subscribeDriveSession,
+    driveSessionAccount,
+    () => null,
+  );
+}
 export function useDriveIdeas() {
   const [user, setUser] = useState<GoogleUser | null>(null);
+  const [restored, setRestored] = useState(false);
   const [demo, setDemo] = useState(false);
+  const session = useDriveSession();
+  const connected = !!user && session === user.id;
+  const linked = useRef(connected);
+  linked.current = connected;
   const [ideas, setIdeas] = useState<Idea[]>([]);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -60,14 +85,15 @@ export function useDriveIdeas() {
       await disk.current;
     }
   }, []);
-  const report = useCallback(
-    (e: unknown) => setError(e instanceof Error ? e.message : String(e)),
-    [],
-  );
+  const report = useCallback((e: unknown) => {
+    // The reconnect banner covers a missing token; drafts stay on the device.
+    if (e instanceof DriveAuthError) setStatus("Drive 재연결 필요");
+    else setError(e instanceof Error ? e.message : String(e));
+  }, []);
   const refresh = useCallback(async () => {
     if (busy.current)
       await new Promise<void>((resolve) => idleWaiters.current.push(resolve));
-    if (!repo.current || !initialized.current) return;
+    if (!repo.current || !initialized.current || !linked.current) return;
     const generation = epoch.current,
       started = revision.current,
       account = owner.current;
@@ -116,6 +142,16 @@ export function useDriveIdeas() {
       return;
     }
     if (!repo.current) return;
+    if (!linked.current) {
+      try {
+        await persist();
+        if (Object.keys(cache.current.pending).length)
+          setStatus("Drive 재연결 필요");
+      } catch (e) {
+        report(e);
+      }
+      return;
+    }
     busy.current = true;
     const generation = epoch.current;
     try {
@@ -151,6 +187,9 @@ export function useDriveIdeas() {
             setError(
               "다른 기기의 변경 내용이 있습니다. 서버 버전과 내 초안을 확인해 주세요.",
             );
+          } else if (e instanceof DriveAuthError) {
+            report(e);
+            return;
           } else report(e);
           setStatus("초안 보관됨 · 재시도 필요");
           return;
@@ -176,6 +215,23 @@ export function useDriveIdeas() {
   useEffect(() => {
     if (driveConfigured) void loadGoogle().catch(report);
   }, [report]);
+  useEffect(() => {
+    // Reopen the last workspace from its device cache; Drive reconnects on
+    // demand. Runs after hydration because storage is browser-only.
+    const remembered = rememberedDriveUser();
+    if (remembered) setUser((prev) => prev ?? remembered);
+    setRestored(true);
+  }, []);
+  useEffect(() => {
+    if (user) rememberDriveUser(user);
+  }, [user]);
+  useEffect(() => {
+    if (connected)
+      void (async () => {
+        await flush();
+        await refresh();
+      })().catch(report);
+  }, [connected, flush, refresh, report]);
   useEffect(() => {
     const account = demo ? "demo" : (user?.id ?? null);
     const generation = ++epoch.current;
@@ -340,7 +396,8 @@ export function useDriveIdeas() {
     backend: "drive" as const,
     user,
     demo,
-    ready: true,
+    connected,
+    ready: restored,
     ideas,
     status,
     error,
@@ -356,14 +413,19 @@ export function useDriveIdeas() {
       update(idea);
       return idea;
     },
-    login: async (additionalPending = false) => {
+    login: async (additionalPending = false, switchAccount = false) => {
+      const hint = !demo && !switchAccount && user ? { hint: user } : {};
       if (
         !demo &&
         (Object.keys(cache.current.pending).length || additionalPending) &&
         user
       ) {
+        if (switchAccount)
+          throw new Error(
+            "미저장 초안이 있어 계정을 전환할 수 없습니다. 먼저 저장하거나 백업하세요.",
+          );
         // Reauthorization is allowed, but account switching with drafts is not.
-        const next = await connectDrive();
+        const next = await connectDrive(hint);
         if (next.id !== user.id) {
           disconnectDrive();
           throw new Error(
@@ -375,7 +437,7 @@ export function useDriveIdeas() {
         return;
       }
       await persist();
-      const next = await connectDrive();
+      const next = await connectDrive(hint);
       if (next.id === user?.id && !demo) {
         await flush();
         await refresh();
@@ -392,7 +454,7 @@ export function useDriveIdeas() {
         return;
       }
       await persist();
-      disconnectDrive();
+      if (!demo) forgetDriveUser();
       setUser(null);
       setDemo(false);
     },
