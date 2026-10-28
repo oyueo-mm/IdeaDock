@@ -22,6 +22,7 @@ vi.mock("../src/lib/drive", async (importOriginal) => ({
     if (!state.repo) throw new Error("not connected");
     return state.repo;
   },
+  driveSessionAccount: () => state.repo?.account ?? null,
 }));
 vi.mock("../src/lib/local-db", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/local-db")>();

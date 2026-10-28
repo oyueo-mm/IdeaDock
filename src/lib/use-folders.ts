@@ -1,6 +1,12 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { activeDriveRepository, driveCacheKey } from "./drive";
+import {
+  activeDriveRepository,
+  DriveAuthError,
+  driveCacheKey,
+  driveSessionAccount,
+  subscribeDriveSession,
+} from "./drive";
 import { FolderRepository } from "./folder-repository";
 import { type Folder, validateFolders } from "./folders";
 import { canonical, digest } from "./integrity";
@@ -56,7 +62,8 @@ export function useFolders(account: string | undefined) {
       !owner.current ||
       owner.current === "demo" ||
       !initialized.current ||
-      busy.current
+      busy.current ||
+      driveSessionAccount() !== owner.current
     )
       return;
     const active = activeDriveRepository();
@@ -99,7 +106,8 @@ export function useFolders(account: string | undefined) {
       return;
     }
     if (!initialized.current || !owner.current) return;
-    if (owner.current === "demo") {
+    if (owner.current === "demo" || driveSessionAccount() !== owner.current) {
+      // Without a Drive token, folder drafts wait on the device.
       await persist();
       return;
     }
@@ -144,7 +152,7 @@ export function useFolders(account: string | undefined) {
       }
       setError("");
     } catch (e) {
-      if (epoch === generation.current) {
+      if (epoch === generation.current && !(e instanceof DriveAuthError)) {
         setError(
           e instanceof Error
             ? e.message === "VERSION_CONFLICT"
@@ -235,7 +243,14 @@ export function useFolders(account: string | undefined) {
     };
   }, [account]);
   useEffect(() => {
-    const run = () => void syncRef.current().catch((e) => setError(String(e)));
+    const run = () =>
+      void syncRef.current().catch((e) => {
+        if (!(e instanceof DriveAuthError)) setError(String(e));
+      });
+    // Sync as soon as a reconnect delivers a token for this workspace.
+    const unsubscribe = subscribeDriveSession(() => {
+      if (owner.current && driveSessionAccount() === owner.current) run();
+    });
     const leave = (e: BeforeUnloadEvent) => {
       if (
         owner.current !== "demo" &&
@@ -249,6 +264,7 @@ export function useFolders(account: string | undefined) {
     window.addEventListener("online", run);
     window.addEventListener("beforeunload", leave);
     return () => {
+      unsubscribe();
       clearInterval(interval);
       window.removeEventListener("online", run);
       window.removeEventListener("beforeunload", leave);

@@ -13,7 +13,13 @@ const state = vi.hoisted(() => ({
   login: vi.fn(),
   join: vi.fn(),
   writeFailure: false,
+  session: null as string | null,
+  listeners: new Set<() => void>(),
 }));
+function setSession(account: string | null) {
+  state.session = account;
+  state.listeners.forEach((listener) => listener());
+}
 vi.mock("../src/lib/local-db", () => ({
   localDb: {
     get: async (key: string) => structuredClone(state.disk.get(key)),
@@ -27,8 +33,26 @@ vi.mock("../src/lib/drive", () => ({
   driveConfigured: false,
   driveCacheKey: (account: string) => `${account}:cache`,
   loadGoogle: vi.fn(),
-  connectDrive: state.login,
-  disconnectDrive: vi.fn(),
+  connectDrive: async (...args: unknown[]) => {
+    const user = await state.login(...args);
+    setSession(user.id);
+    return user;
+  },
+  disconnectDrive: () => setSession(null),
+  forgetDriveUser: () => {
+    setSession(null);
+    localStorage.removeItem("ideadock:drive-account");
+  },
+  rememberDriveUser: (user: unknown) =>
+    localStorage.setItem("ideadock:drive-account", JSON.stringify(user)),
+  rememberedDriveUser: () =>
+    JSON.parse(localStorage.getItem("ideadock:drive-account") || "null"),
+  driveSessionAccount: () => state.session,
+  subscribeDriveSession: (listener: () => void) => {
+    state.listeners.add(listener);
+    return () => state.listeners.delete(listener);
+  },
+  DriveAuthError: class DriveAuthError extends Error {},
   GoogleDrive: class {},
   DriveRepository: class {
     save = state.save;
@@ -37,11 +61,14 @@ vi.mock("../src/lib/drive", () => ({
   },
 }));
 import { useDriveIdeas } from "../src/lib/use-ideas";
+import { DriveAuthError } from "../src/lib/drive";
 beforeEach(() => {
   localStorage.clear();
   state.disk.clear();
   state.rows = [];
   state.writeFailure = false;
+  state.session = null;
+  state.listeners.clear();
   state.login.mockReset().mockResolvedValue({
     id: "google:alice",
     email: "alice@example.com",
@@ -248,5 +275,93 @@ describe("Drive autosave and local recovery", () => {
     expect(state.disk.get("google:alice:cache")).toMatchObject({
       pending: { [original.id]: { idea: { title: "my draft" } } },
     });
+  });
+  it("reopens the remembered workspace after a reload and reconnects without the account chooser", async () => {
+    const first = await setup();
+    act(() => {
+      first.result.current.create("kept across reload");
+    });
+    await act(async () => first.result.current.flush());
+    first.unmount();
+    // A reload loses the in-memory token; the device cache must still open.
+    setSession(null);
+    state.login.mockClear();
+    state.save.mockClear();
+    const reload = renderHook(() => useDriveIdeas());
+    await waitFor(() =>
+      expect(reload.result.current.ideas[0]?.title).toBe("kept across reload"),
+    );
+    expect(reload.result.current.user?.id).toBe("google:alice");
+    expect(reload.result.current.connected).toBe(false);
+    act(() => {
+      reload.result.current.update({
+        ...reload.result.current.ideas[0],
+        title: "edited while disconnected",
+      });
+    });
+    await act(async () => reload.result.current.flush());
+    expect(state.save).not.toHaveBeenCalled();
+    expect(reload.result.current.error).toBe("");
+    expect(reload.result.current.pendingCount).toBe(1);
+    await act(async () => reload.result.current.login());
+    expect(state.login).toHaveBeenCalledWith({
+      hint: expect.objectContaining({ id: "google:alice" }),
+    });
+    await waitFor(() => expect(reload.result.current.pendingCount).toBe(0));
+    expect(state.rows[0].idea.title).toBe("edited while disconnected");
+  });
+  it("keeps drafts and shows no error when the token expires mid-save", async () => {
+    const { result } = await setup();
+    state.save.mockImplementationOnce(async () => {
+      setSession(null);
+      throw new DriveAuthError();
+    });
+    act(() => {
+      result.current.create("expired token draft");
+    });
+    await act(async () => result.current.flush());
+    expect(result.current.error).toBe("");
+    expect(result.current.connected).toBe(false);
+    expect(result.current.pendingCount).toBe(1);
+    expect(state.disk.get("google:alice:cache")).toMatchObject({
+      ideas: [{ title: "expired token draft" }],
+    });
+  });
+  it("switches accounts through the chooser and forgets the workspace at sign-out", async () => {
+    const { result, unmount } = await setup();
+    state.login.mockResolvedValueOnce({
+      id: "google:bob",
+      email: "bob@example.com",
+      user_metadata: { full_name: "Bob" },
+    });
+    await act(async () => result.current.login(false, true));
+    expect(state.login).toHaveBeenLastCalledWith({});
+    await waitFor(() => expect(result.current.user?.id).toBe("google:bob"));
+    expect(JSON.parse(localStorage.getItem("ideadock:drive-account")!).id).toBe(
+      "google:bob",
+    );
+    await act(async () => result.current.signOut());
+    expect(result.current.user).toBeNull();
+    expect(localStorage.getItem("ideadock:drive-account")).toBeNull();
+    unmount();
+    const reload = renderHook(() => useDriveIdeas());
+    await waitFor(() => expect(reload.result.current.ready).toBe(true));
+    expect(reload.result.current.user).toBeNull();
+    expect(reload.result.current.ideas).toEqual([]);
+  });
+  it("refuses an account switch before opening Google when drafts are pending", async () => {
+    const { result } = await setup();
+    setSession(null);
+    act(() => {
+      result.current.create("unsaved");
+    });
+    state.login.mockClear();
+    await act(async () => {
+      await expect(result.current.login(false, true)).rejects.toThrow(
+        "계정을 전환할 수 없습니다",
+      );
+    });
+    expect(state.login).not.toHaveBeenCalled();
+    expect(result.current.user?.id).toBe("google:alice");
   });
 });

@@ -15,8 +15,12 @@ export function mockDrive() {
     revisions = 0;
   let loseSecondRevision = false;
   let rejectWrites = false;
+  let expired = false;
   return {
     files,
+    expireToken: (value: boolean) => {
+      expired = value;
+    },
     rejectWrites: (value: boolean) => {
       rejectWrites = value;
     },
@@ -27,7 +31,7 @@ export function mockDrive() {
       await context.route("https://accounts.google.com/gsi/client", (route) =>
         route.fulfill({
           contentType: "application/javascript",
-          body: `window.google={accounts:{oauth2:{initTokenClient(options){if(!options.scope.includes("drive.file") || options.scope.includes("drive.appdata")) throw new Error("Unexpected Drive scope"); return {requestAccessToken(){options.callback({access_token:"test-only",expires_in:3600,scope:options.scope});}}}}}};`,
+          body: `window.google={accounts:{oauth2:{initTokenClient(options){if(!options.scope.includes("drive.file") || options.scope.includes("drive.appdata")) throw new Error("Unexpected Drive scope"); return {requestAccessToken(request){(window.__gisRequests ||= []).push({prompt:request.prompt,login_hint:options.login_hint ?? null});options.callback({access_token:"test-only",expires_in:3600,scope:options.scope});}}}}}};`,
         }),
       );
       await context.route(
@@ -53,6 +57,7 @@ export function mockDrive() {
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Expose-Headers": "Location",
         };
+        if (expired) return route.fulfill({ headers, status: 401 });
         if (url.pathname.endsWith("generateIds")) {
           expect(url.searchParams.get("space")).toBe("drive");
           return route.fulfill({

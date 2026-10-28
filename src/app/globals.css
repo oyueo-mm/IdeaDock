@@ -1386,6 +1386,25 @@ button:hover:not(:disabled) {
   border-radius: 5px;
   font-size: 12px;
 }
+.reconnect-notice {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.reconnect-notice > span {
+  flex: 1;
+  min-width: 150px;
+}
+.reconnect-notice button {
+  background: var(--primary);
+  color: var(--on-primary);
+  border: 1px solid var(--primary);
+  border-radius: 4px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
 @media (max-width: 640px) {
   .sync-alerts:not(:empty) {
     position: fixed;
