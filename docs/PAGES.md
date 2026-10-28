@@ -67,6 +67,14 @@ http://localhost:3000
 
 `/IdeaDock/`, `/#idea=...`, 와일드카드는 넣지 않습니다. 사용자가 공개 원본 추가를 완료했다고 확인했습니다. GIS token model에는 앱 서버 callback이나 Client Secret이 필요하지 않습니다. 기존 Cloud 프로젝트·OAuth 클라이언트·Drive API·`drive.file` 권한을 유지하여 기존 폴더와 데이터의 접근 관계를 보존합니다.
 
+## PWA 설치
+
+`src/app/manifest.ts`가 `/IdeaDock/manifest.webmanifest`를 만듭니다. `id`·`start_url`·`scope`는 모두 `/IdeaDock/`이고, 같은 원본의 TransitLog(`/TransitLog/`)와 겹치지 않습니다. 아이콘은 `node scripts/generate-icons.mjs`로 `public/icons/`에 다시 만듭니다. `scripts/verify-static.mjs`는 이 값과 아이콘 파일이 어긋나면 배포를 중단합니다.
+
+서비스 워커는 두지 않습니다. Chrome은 설치 조건으로 서비스 워커를 요구하지 않으며, 캐시가 구버전을 붙잡거나 Google 로그인 요청을 가로챌 위험을 피합니다.
+
+Android Chrome 154–156은 같은 원본에 WebAPK가 하나라도 있으면 경로·`id`와 무관하게 "이미 설치됨"으로 판단하는 회귀가 있습니다(Chromium 이슈 568841400, 수정 CL 8556881은 157에 반영). 이 버전에서는 매니페스트로 해결되지 않으므로 Chrome 157 이상으로 업데이트하거나, Samsung Internet으로 설치하거나, 홈 화면 바로가기를 쓰거나, IdeaDock에 별도 (서브)도메인을 연결해야 합니다. 도메인을 바꾸면 Google OAuth 승인 원본과 브라우저 로컬 데이터의 원본도 함께 바뀝니다.
+
 ## 공개 검증
 
 공개 호스트의 HTTP·JS/CSS, 실제 로그인·기존 아이디어 조회·새 테스트 저장·수정·이미지 업로드·재조회·두 독립 세션의 동기화를 확인합니다. 실제 물리적인 PC·휴대폰, Safari/WebKit, 두 번째 Google 계정, 장시간 절전·오프라인은 별도 실기기 항목입니다. [검증 기록](VALIDATION.md)에 실행 여부를 구분합니다.

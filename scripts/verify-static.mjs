@@ -23,10 +23,51 @@ export function verifyStaticHtml(html, hasFile) {
   return assets.length;
 }
 
+/**
+ * Keeps the PWA identity inside /IdeaDock/ so it never claims the shared
+ * oyueo-mm.github.io origin or collides with sibling apps such as /TransitLog/.
+ * @param {string} html
+ * @param {string} source
+ * @param {(path: string) => boolean} hasFile
+ */
+export function verifyManifest(html, source, hasFile) {
+  if (
+    !html.includes('<link rel="manifest" href="/IdeaDock/manifest.webmanifest"')
+  )
+    throw new Error("Page does not link the /IdeaDock/ manifest.");
+  const manifest = JSON.parse(source);
+  for (const key of ["id", "start_url", "scope"])
+    if (manifest[key] !== "/IdeaDock/")
+      throw new Error(`Manifest ${key} must be /IdeaDock/.`);
+  if (manifest.display !== "standalone" || !manifest.name)
+    throw new Error("Manifest is not installable.");
+  const icons = manifest.icons ?? [];
+  for (const [sizes, purpose] of [
+    ["192x192", "any"],
+    ["512x512", "any"],
+    ["512x512", "maskable"],
+  ])
+    if (!icons.some((icon) => icon.sizes === sizes && icon.purpose === purpose))
+      throw new Error(`Manifest lacks a ${sizes} ${purpose} icon.`);
+  for (const { src } of icons) {
+    if (!src.startsWith("/IdeaDock/icons/"))
+      throw new Error("Manifest icon escapes the /IdeaDock base path.");
+    if (!hasFile(src.slice("/IdeaDock/".length)))
+      throw new Error("Manifest icon is missing.");
+  }
+  return icons.length;
+}
+
 export function verifyStaticExport(directory = "out") {
   const root = resolve(directory);
   const html = readFileSync(join(root, "index.html"), "utf8");
-  const assets = verifyStaticHtml(html, (path) => existsSync(join(root, path)));
+  const hasFile = (/** @type {string} */ path) => existsSync(join(root, path));
+  const assets = verifyStaticHtml(html, hasFile);
+  const icons = verifyManifest(
+    html,
+    readFileSync(join(root, "manifest.webmanifest"), "utf8"),
+    hasFile,
+  );
   if (!existsSync(join(root, ".nojekyll")))
     throw new Error("Missing .nojekyll marker.");
   const files = readdirSync(root, { recursive: true }).map(String);
@@ -57,7 +98,7 @@ export function verifyStaticExport(directory = "out") {
         "Release export contains missing or mock OAuth configuration.",
       );
   }
-  return { assets, files: files.length };
+  return { assets, icons, files: files.length };
 }
 
 if (
