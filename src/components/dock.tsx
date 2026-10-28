@@ -35,14 +35,22 @@ import {
   Idea,
   IdeaImage,
   IdeaLink,
-  selectIdeas,
   validUrl,
   validateImage,
   removeImageContent,
 } from "@/lib/model";
 import { supabase } from "@/lib/supabase";
 import Editor from "./editor";
-import IdeaThumbnail from "./idea-thumbnail";
+import { useFolders } from "@/lib/use-folders";
+import { folderTrashed } from "@/lib/folders";
+import {
+  useExplorer,
+  FolderTree,
+  ExplorerList,
+  ExplorerActions,
+  ExplorerBreadcrumb,
+} from "./explorer";
+import WordImportPanel from "./word-import-panel";
 import MigrationPanel, { downloadJson } from "./migration-panel";
 import { dataUrl, imageUrl, readImage, uploadDriveImage } from "@/lib/images";
 import { prepareBackup } from "@/lib/migration";
@@ -75,6 +83,13 @@ function date(value: string) {
 export default function Dock() {
   const store = useIdeas();
   const { ideas, update } = store;
+  const folderStore = useFolders(
+    store.demo
+      ? "demo"
+      : store.backend === "drive"
+        ? store.user?.id
+        : undefined,
+  );
   const [filter, setFilter] = useState<Filter>("all"),
     [tag, setTag] = useState(""),
     [sort, setSort] = useState("updated"),
@@ -85,13 +100,36 @@ export default function Dock() {
     [settings, setSettings] = useState(false),
     [theme, setTheme] = useState("system");
   const current = ideas.find((i) => i.id === selected),
-    visible = selectIdeas(ideas, filter, tag, "", sort),
-    active = ideas.filter((i) => !i.deleted_at),
+    active = ideas.filter(
+      (i) => !i.deleted_at && !folderTrashed(folderStore.folders, i.folder_id),
+    ),
     tags = Array.from(new Set(active.flatMap((i) => i.tags))).sort();
   const [zoom, setZoom] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
   const [focusTitle, setFocusTitle] = useState<string | null>(null);
   const [demoNotice, setDemoNotice] = useState(false);
+  const explorer = useExplorer({
+    ideas,
+    folderStore,
+    owner: store.demo
+      ? "demo"
+      : store.backend === "drive"
+        ? store.user?.id
+        : undefined,
+    filter,
+    tag,
+    sort,
+    onOpen: open,
+    onClear: clearDetail,
+    onError: store.setError,
+    onSelection: () => setLayout((prev) => ({ ...prev, right: true })),
+    onNavigate: () => {
+      setFilter("all");
+      setTag("");
+      setMobileNav(false);
+    },
+  });
+  explorer.updateRef.current = update;
   const settingsRef = useRef<HTMLElement>(null);
   const zoomRef = useRef<HTMLDivElement>(null);
   useDialogFocus(settingsRef, settings);
@@ -159,6 +197,21 @@ export default function Dock() {
   }, []);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (
+        target.isContentEditable ||
+        target.closest("input,textarea,select,[contenteditable=true]")
+      )
+        return;
+      if (
+        !settings &&
+        !zoom &&
+        !mobileNav &&
+        !target.closest(
+          ".explorer-list,.folder-tree,.explorer-context,.explorer-actions",
+        )
+      )
+        return;
       if (e.key === "Escape") {
         if (zoom) {
           setZoom(null);
@@ -184,16 +237,20 @@ export default function Dock() {
     setLayout((prev) => ({ ...prev, right: true }));
     history.pushState(null, "", `#idea=${idea.id}`);
   }
-  function close() {
+  function clearDetail() {
     setSelected(null);
     history.replaceState(null, "", location.pathname);
+  }
+  function close() {
+    explorer.clear();
   }
   function add() {
     const idea = store.create("제목 없는 아이디어");
     if (idea) {
       setTag("");
       setFilter("all");
-      open(idea);
+      if (explorer.folderId) update({ ...idea, folder_id: explorer.folderId });
+      explorer.selectCreated(idea);
       setFocusTitle(idea.id);
       setMobileNav(false);
     }
@@ -260,20 +317,32 @@ export default function Dock() {
   }
   async function login() {
     try {
-      await store.login();
+      if (store.backend === "drive")
+        await store.login(!store.demo && folderStore.pendingCount > 0);
+      else await store.login();
     } catch (error) {
       store.setError(error instanceof Error ? error.message : String(error));
     }
   }
   async function backup() {
     try {
-      if (!ideas.length) {
+      if (!folderStore.ready) throw new Error("폴더를 불러온 후 백업하세요.");
+      if (!ideas.length && !folderStore.folders.length) {
         downloadJson({ ideas: [] }, "ideadock-empty-backup.json");
         return;
       }
       const owner = store.demo ? "demo" : `${store.backend}:${store.user?.id}`;
       const result = await prepareBackup(
-        [{ id: owner, label: "현재 작업 공간", ideas }],
+        [
+          {
+            id: owner,
+            label: "현재 작업 공간",
+            ideas,
+            ...(folderStore.folders.length
+              ? { folders: folderStore.folders }
+              : {}),
+          },
+        ],
         readImage,
         dataUrl,
         null,
@@ -318,7 +387,7 @@ export default function Dock() {
         </div>
         <button
           className="new-idea"
-          disabled={!authenticated}
+          disabled={!authenticated || !store.ready || !folderStore.ready}
           onClick={add}
           title={
             !authenticated
@@ -334,10 +403,13 @@ export default function Dock() {
             <button
               key={item.id}
               className={
-                filter === item.id && !tag ? "nav-item selected" : "nav-item"
+                filter === item.id && !tag && explorer.folderId === undefined
+                  ? "nav-item selected"
+                  : "nav-item"
               }
               onClick={() => {
                 setFilter(item.id);
+                explorer.navigate(undefined);
                 setTag("");
                 setMobileNav(false);
               }}
@@ -347,7 +419,14 @@ export default function Dock() {
               {authenticated && (
                 <small>
                   {item.id === "trash"
-                    ? ideas.filter((i) => i.deleted_at).length
+                    ? ideas.filter(
+                        (i) =>
+                          i.deleted_at ||
+                          folderTrashed(folderStore.folders, i.folder_id),
+                      ).length +
+                      folderStore.folders.filter((f) =>
+                        folderTrashed(folderStore.folders, f.id),
+                      ).length
                     : item.id === "all"
                       ? active.length
                       : item.id === "active"
@@ -374,6 +453,7 @@ export default function Dock() {
                     onClick={() => {
                       setTag(t === tag ? "" : t);
                       setFilter("all");
+                      explorer.navigate(undefined);
                       setMobileNav(false);
                     }}
                   >
@@ -390,13 +470,33 @@ export default function Dock() {
             </div>
           </>
         )}
+        {authenticated && <FolderTree e={explorer} />}
         <div className="sidebar-bottom">
           <MigrationPanel
             account={store.backend === "drive" ? store.user?.id : undefined}
             demo={store.demo}
-            pending={store.pendingCount}
-            onRefresh={store.backend === "drive" ? store.refresh : store.flush}
+            pending={
+              store.pendingCount + (!store.demo ? folderStore.pendingCount : 0)
+            }
+            onRefresh={async () => {
+              await folderStore.refresh();
+              await (store.backend === "drive"
+                ? store.refresh()
+                : store.flush());
+            }}
             onBackup={backup}
+            wordImport={
+              <WordImportPanel
+                account={store.backend === "drive" ? store.user?.id : undefined}
+                ideas={ideas}
+                folders={folderStore.folders}
+                pending={store.pendingCount + folderStore.pendingCount}
+                onRefresh={async () => {
+                  await folderStore.refresh();
+                  if (store.backend === "drive") await store.refresh();
+                }}
+              />
+            }
           />
           <button
             className="account"
@@ -556,109 +656,73 @@ export default function Dock() {
               </div>
             ))}
           </div>
-          {!authenticated ? null : !store.ready ? (
-            <div className="empty">
-              <LoaderCircle className="spin" />
-              작업 공간을 불러오는 중…
-            </div>
-          ) : visible.length ? (
-            <div className="idea-list">
-              {visible.map((idea) => (
-                <article
-                  className={`idea-row ${selected === idea.id ? "is-selected" : ""}`}
-                  key={idea.id}
+          {authenticated && (
+            <>
+              <ExplorerBreadcrumb e={explorer} />
+              <div className="explorer-toolbar">
+                <button onClick={() => explorer.createFolder()}>새 폴더</button>
+                <button
+                  onClick={() => {
+                    explorer.setMobileMulti(!explorer.mobileMulti);
+                  }}
+                  aria-pressed={explorer.mobileMulti}
                 >
-                  <input
-                    aria-label={`${idea.title} 완료`}
-                    className="completion-check"
-                    type="checkbox"
-                    checked={idea.is_completed}
-                    onChange={(e) =>
-                      update({ ...idea, is_completed: e.target.checked })
-                    }
-                  />
-                  <button className="idea-summary" onClick={() => open(idea)}>
-                    <span className="idea-title">
-                      {idea.is_pinned && <Pin size={12} />} {idea.title}
-                      {idea.is_completed && (
-                        <small className="completed-label">완료</small>
-                      )}
-                    </span>
-                    <span className="idea-preview">
-                      {idea.plain_text || "본문 없음"}
-                    </span>
-                    <span className="idea-meta">
-                      {idea.tags.map((t, index) => (
-                        <span key={t} className={`tag-chip color-${index % 5}`}>
-                          {t}
-                        </span>
-                      ))}
-                      <span>{date(idea.updated_at)}</span>
-                      {idea.provenance && <span>이전한 아이디어</span>}
-                      {idea.images.length > 0 && (
-                        <span>이미지 {idea.images.length}</span>
-                      )}
-                    </span>
+                  다중 선택
+                </button>
+                {explorer.selected.size > 0 && (
+                  <span role="status">{explorer.selected.size}개 선택됨</span>
+                )}
+              </div>
+              {folderStore.error && (
+                <div className="error-banner" role="alert">
+                  {folderStore.error}
+                  <button onClick={() => void folderStore.flush()}>
+                    폴더 저장 재시도
                   </button>
-                  <div className="row-actions">
-                    {idea.links.find((l) => l.type === "website") && (
-                      <a
-                        className="icon-button"
-                        href={idea.links.find((l) => l.type === "website")!.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        aria-label={`${idea.title} 웹사이트 열기`}
-                      >
-                        <ExternalLink size={15} />
-                      </a>
-                    )}
-                    {idea.deleted_at ? (
-                      <button
-                        className="icon-button"
-                        aria-label={`${idea.title} 복원`}
-                        onClick={() => update({ ...idea, deleted_at: null })}
-                      >
-                        <RotateCcw size={16} />
-                      </button>
-                    ) : (
-                      <button
-                        className={`icon-button pin-action ${idea.is_pinned ? "pinned" : ""}`}
-                        aria-label={`${idea.title} 고정 ${idea.is_pinned ? "해제" : ""}`}
-                        onClick={() =>
-                          update({ ...idea, is_pinned: !idea.is_pinned })
-                        }
-                      >
-                        <Pin size={15} />
-                      </button>
-                    )}
-                  </div>
-                  {idea.images[0] && (
-                    <IdeaThumbnail
-                      image={idea.images[0]}
-                      title={idea.title}
-                      onOpen={() => open(idea)}
-                    />
-                  )}
-                </article>
+                </div>
+              )}
+              {!store.demo && folderStore.pendingCount > 0 && (
+                <p role="status">
+                  미저장 폴더 변경 {folderStore.pendingCount}개
+                </p>
+              )}
+              {folderStore.conflicts.map((id) => (
+                <div className="conflict" key={id} role="alert">
+                  폴더 충돌 ·{" "}
+                  {folderStore.folders.find((f) => f.id === id)?.name ?? id}
+                  <button
+                    onClick={() =>
+                      void folderStore
+                        .resolve(id)
+                        .catch((e) => store.setError(String(e)))
+                    }
+                  >
+                    폴더 버전을 보존하고 루트로 복구
+                  </button>
+                </div>
               ))}
-            </div>
-          ) : (
-            <div className="empty">
-              <h2>
-                {filter === "trash"
-                  ? "휴지통이 비어 있습니다"
-                  : filter === "completed"
-                    ? "완료한 아이디어가 없습니다"
-                    : "아이디어가 없습니다"}
-              </h2>
-            </div>
+              {!store.ready || !folderStore.ready ? (
+                <div className="empty">작업 공간을 불러오는 중…</div>
+              ) : (
+                <>
+                  <ExplorerList e={explorer} update={update} />
+                  {(explorer.selected.size > 1 ||
+                    explorer.selectedFolders.length > 0 ||
+                    (explorer.mobileMulti && explorer.selected.size > 0)) && (
+                    <div className="mobile-selection-actions">
+                      <ExplorerActions e={explorer} />
+                    </div>
+                  )}
+                </>
+              )}
+            </>
           )}
         </div>
       </main>
       {layout.right && separator("right")}
       {layout.right && (
         <aside
-          className={`detail-panel ${current ? "has-selection" : ""}`}
+          className={`detail-panel ${current || explorer.selected.size ? "has-selection" : ""}`}
           aria-label="아이디어 상세"
         >
           <header className="detail-header">
@@ -684,7 +748,10 @@ export default function Dock() {
               <X size={18} />
             </button>
           </header>
-          {current ? (
+          {explorer.selected.size > 1 ||
+          (explorer.selected.size > 0 && !current) ? (
+            <ExplorerActions e={explorer} />
+          ) : current ? (
             <Detail
               key={current.id}
               idea={current}
@@ -694,6 +761,13 @@ export default function Dock() {
               onError={store.setError}
               onZoom={setZoom}
               focusTitle={focusTitle === current.id}
+              inheritedTrash={folderTrashed(
+                folderStore.folders,
+                current.folder_id,
+              )}
+              onRestore={() =>
+                explorer.bulk("restore", new Set([`i:${current.id}`]), true)
+              }
             />
           ) : authenticated ? (
             <div className="detail-placeholder">
@@ -777,6 +851,12 @@ export default function Dock() {
               <button
                 className="settings-button"
                 onClick={() => {
+                  if (!store.demo && folderStore.pendingCount) {
+                    store.setError(
+                      "미저장 폴더 변경이 있습니다. 다시 연결하여 동기화하거나 백업한 후 로그아웃하세요.",
+                    );
+                    return;
+                  }
                   void store.signOut();
                   setSettings(false);
                 }}
@@ -816,6 +896,8 @@ function Detail({
   onError,
   onZoom,
   focusTitle,
+  inheritedTrash,
+  onRestore,
 }: {
   idea: Idea;
   onChange: (idea: Idea) => void;
@@ -824,6 +906,8 @@ function Detail({
   onError: (text: string) => void;
   onZoom: (url: string) => void;
   focusTitle: boolean;
+  inheritedTrash: boolean;
+  onRestore: () => void;
 }) {
   const titleRef = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
@@ -990,17 +1074,20 @@ function Detail({
           <button
             className="icon-button"
             aria-label={
-              idea.deleted_at
+              idea.deleted_at || inheritedTrash
                 ? "현재 아이디어 복원"
                 : "현재 아이디어 휴지통으로 이동"
             }
-            onClick={() =>
-              patch({
-                deleted_at: idea.deleted_at ? null : new Date().toISOString(),
-              })
-            }
+            onClick={() => {
+              if (idea.deleted_at || inheritedTrash) onRestore();
+              else patch({ deleted_at: new Date().toISOString() });
+            }}
           >
-            {idea.deleted_at ? <RotateCcw size={16} /> : <Trash2 size={16} />}
+            {idea.deleted_at || inheritedTrash ? (
+              <RotateCcw size={16} />
+            ) : (
+              <Trash2 size={16} />
+            )}
           </button>
         </div>
       </div>

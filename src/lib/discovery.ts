@@ -3,6 +3,7 @@ import { validateIdeas } from "./integrity";
 import { DB_NAME } from "./local-db";
 import { supabase } from "./supabase";
 import type { Idea } from "./model";
+import { validateWorkspace } from "./folders";
 
 export type Inspection = {
   label: string;
@@ -54,9 +55,18 @@ export async function inspectLegacy(): Promise<Inspection[]> {
           owner === "demo" ? "demo" : `local:${owner}`,
           label,
         );
+        if (owner === "demo") {
+          const folderRaw = localStorage.getItem("ideadock:folders:demo:v2");
+          if (folderRaw) {
+            source.folders = JSON.parse(folderRaw).folders;
+            validateWorkspace(source.ideas, source.folders ?? []);
+            source.raw = { ideas: source.raw, folders: JSON.parse(folderRaw) };
+          }
+        }
         results.push({
           label,
-          state: source.ideas.length ? "found" : "empty",
+          state:
+            source.ideas.length || source.folders?.length ? "found" : "empty",
           detail: `${source.ideas.length}개 (휴지통 포함)`,
           source,
         });

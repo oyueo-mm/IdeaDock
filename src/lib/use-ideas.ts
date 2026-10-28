@@ -15,6 +15,7 @@ import {
   Revision,
 } from "./drive";
 import { useLegacyIdeas } from "./use-legacy-ideas";
+import { waitForFolderWrites } from "./folder-sync-gate";
 
 type Pending = { idea: Idea; parent: string | null; seq: number };
 type Cache = {
@@ -40,6 +41,7 @@ export function useDriveIdeas() {
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const disk = useRef(Promise.resolve());
   const branches = useRef<Record<string, Revision[]>>({});
+  const idleWaiters = useRef<(() => void)[]>([]);
   const publish = useCallback(() => {
     revision.current++;
     setIdeas([...cache.current.ideas]);
@@ -63,7 +65,9 @@ export function useDriveIdeas() {
     [],
   );
   const refresh = useCallback(async () => {
-    if (!repo.current || busy.current || !initialized.current) return;
+    if (busy.current)
+      await new Promise<void>((resolve) => idleWaiters.current.push(resolve));
+    if (!repo.current || !initialized.current) return;
     const generation = epoch.current,
       started = revision.current,
       account = owner.current;
@@ -97,7 +101,11 @@ export function useDriveIdeas() {
     await persist();
   }, [persist, publish]);
   const flush = useCallback(async () => {
-    if (busy.current || !owner.current || !initialized.current) return;
+    if (busy.current) {
+      await new Promise<void>((resolve) => idleWaiters.current.push(resolve));
+      return;
+    }
+    if (!owner.current || !initialized.current) return;
     if (owner.current === "demo") {
       try {
         await persist();
@@ -112,6 +120,8 @@ export function useDriveIdeas() {
     const generation = epoch.current;
     try {
       await persist(); // Never send a draft before durable local storage succeeds.
+      await waitForFolderWrites(owner.current!);
+      if (epoch.current !== generation) return;
       for (const [id, p] of Object.entries(cache.current.pending)) {
         if (epoch.current !== generation) break;
         setStatus("Drive에 저장 중…");
@@ -157,7 +167,10 @@ export function useDriveIdeas() {
     } catch (e) {
       if (epoch.current === generation) report(e);
     } finally {
-      busy.current = false;
+      if (epoch.current === generation) {
+        busy.current = false;
+        idleWaiters.current.splice(0).forEach((resolve) => resolve());
+      }
     }
   }, [persist, publish, report]);
   useEffect(() => {
@@ -166,6 +179,8 @@ export function useDriveIdeas() {
   useEffect(() => {
     const account = demo ? "demo" : (user?.id ?? null);
     const generation = ++epoch.current;
+    busy.current = false;
+    idleWaiters.current.splice(0).forEach((resolve) => resolve());
     owner.current = account;
     initialized.current = false;
     cache.current = { ideas: [], pending: {}, heads: {} };
@@ -341,8 +356,12 @@ export function useDriveIdeas() {
       update(idea);
       return idea;
     },
-    login: async () => {
-      if (!demo && Object.keys(cache.current.pending).length && user) {
+    login: async (additionalPending = false) => {
+      if (
+        !demo &&
+        (Object.keys(cache.current.pending).length || additionalPending) &&
+        user
+      ) {
         // Reauthorization is allowed, but account switching with drafts is not.
         const next = await connectDrive();
         if (next.id !== user.id) {

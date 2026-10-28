@@ -44,6 +44,23 @@ export function validateIdeas(input: unknown): asserts input is Idea[] {
     if (typeof i.id !== "string" || !i.id || ids.has(i.id))
       fail(i.id, "중복 또는 잘못된 ID");
     ids.add(i.id);
+    if (
+      i.imports !== undefined &&
+      (!Array.isArray(i.imports) ||
+        i.imports.some(
+          (r) =>
+            !r ||
+            typeof r.file_hash !== "string" ||
+            typeof r.item_id !== "string",
+        ))
+    )
+      fail(i.id, "imports");
+    if (
+      i.folder_id !== undefined &&
+      i.folder_id !== null &&
+      (typeof i.folder_id !== "string" || !i.folder_id)
+    )
+      fail(i.id, "folder_id");
     for (const key of ["title", "plain_text", "user_id"] as const)
       if (typeof i[key] !== "string") fail(i.id, key);
     for (const key of ["is_completed", "is_pinned"] as const)
