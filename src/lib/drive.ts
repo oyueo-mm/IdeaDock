@@ -1,6 +1,7 @@
 import { KeyValueStore, localDb } from "./local-db";
 import { canonical, digest, validateIdeas } from "./integrity";
 import type { Idea } from "./model";
+import { RevisionLoader } from "./revision-loader";
 
 export type GoogleUser = {
   id: string;
@@ -215,6 +216,7 @@ export function disconnectDrive() {
 }
 /** Sign-out: forget the token and the remembered workspace on this device. */
 export function forgetDriveUser() {
+  shared = undefined;
   disconnectDrive();
   try {
     storage("localStorage")?.removeItem(accountKey);
@@ -231,7 +233,8 @@ export type RemoteFile = {
 };
 export interface ImmutableRemote {
   readonly storageNamespace?: string;
-  list(kind: string): Promise<RemoteFile[]>;
+  /** `key` narrows the listing to one content hash; filtering again is harmless. */
+  list(kind: string, key?: string): Promise<RemoteFile[]>;
   allocate(): Promise<string>;
   read(id: string): Promise<Blob>;
   create(id: string, key: string, kind: string, blob: Blob): Promise<void>;
@@ -244,13 +247,24 @@ export class GoogleDrive implements ImmutableRemote {
   private async request(path: string, init: RequestInit = {}, upload = false) {
     const active = current();
     if (!active || active.user.id !== this.account) throw new DriveAuthError();
-    const response = await fetch(
-      `https://www.googleapis.com/${upload ? "upload/" : ""}drive/v3/${path}`,
-      {
+    const url = `https://www.googleapis.com/${upload ? "upload/" : ""}drive/v3/${path}`;
+    const send = () =>
+      fetch(url, {
         ...init,
         headers: { ...init.headers, Authorization: `Bearer ${active.token}` },
-      },
-    );
+      });
+    let response = await send();
+    // Reads are idempotent: ride out Drive's rate limiting and brief outages.
+    for (
+      let attempt = 0;
+      attempt < 2 &&
+      (init.method ?? "GET") === "GET" &&
+      (response.status === 429 || response.status === 503);
+      attempt++
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 400 * 2 ** attempt));
+      response = await send();
+    }
     if (response.status === 401) {
       // Revoked or expired early: forget the token, keep the local drafts.
       if (session === active) setSession(undefined);
@@ -271,7 +285,17 @@ export class GoogleDrive implements ImmutableRemote {
     }
     return response;
   }
+  // The set of IdeaDock root folders only changes when a device first uses an
+  // empty Drive, so it is re-queried at most every 30 s instead of per listing.
+  private roots?: { at: number; rows: { id: string }[] };
   private async folders(): Promise<{ id: string }[]> {
+    if (this.roots && Date.now() - this.roots.at < 30000)
+      return this.roots.rows;
+    const rows = await this.queryFolders();
+    this.roots = { at: Date.now(), rows };
+    return rows;
+  }
+  private async queryFolders(): Promise<{ id: string }[]> {
     const rows: { id: string }[] = [];
     let pageToken = "";
     do {
@@ -298,8 +322,9 @@ export class GoogleDrive implements ImmutableRemote {
     return this.folderPromise;
   }
   private async createFolder() {
-    const existing = await this.folders();
+    const existing = await this.queryFolders();
     if (existing.length) return existing[0].id;
+    this.roots = undefined; // the root created below must be seen by the next listing
     const key = `${this.account}:drive.file:root`;
     let id = await localDb.get<string>(key);
     if (!id) {
@@ -335,7 +360,12 @@ export class GoogleDrive implements ImmutableRemote {
     }
     return id;
   }
-  async list(kind: string) {
+  async list(kind: string, key?: string) {
+    if (key !== undefined && !/^[a-f0-9]{64}$/.test(key))
+      throw new Error("잘못된 Drive 파일 키입니다.");
+    const keyQuery = key
+      ? ` and appProperties has { key='key' and value='${key}' }`
+      : "";
     const rows: RemoteFile[] = [];
     const folders = driveSpace === "drive" ? await this.folders() : [];
     if (driveSpace === "drive" && !folders.length) return rows;
@@ -348,7 +378,7 @@ export class GoogleDrive implements ImmutableRemote {
     do {
       const params = new URLSearchParams({
         spaces: driveSpace,
-        q: `trashed = false and appProperties has { key='kind' and value='${kind}' }${parentQuery}`,
+        q: `trashed = false and appProperties has { key='kind' and value='${kind}' }${keyQuery}${parentQuery}`,
         fields: "nextPageToken,files(id,appProperties)",
         pageSize: "1000",
         ...(pageToken ? { pageToken } : {}),
@@ -420,16 +450,33 @@ export type Revision = {
 };
 export type DriveRow = { idea: Idea; head: string; conflicts: Revision[] };
 export class DriveRepository {
+  private uploads = new Map<string, number>();
+  private snapshot?: { key: string; rows: DriveRow[] };
+  private readonly loader: RevisionLoader<Revision>;
   constructor(
     readonly account: string,
     readonly remote: ImmutableRemote,
     readonly db: KeyValueStore = localDb,
-  ) {}
+  ) {
+    this.loader = new RevisionLoader<Revision>({
+      remote,
+      db,
+      kind: "revision",
+      cacheKey: (hash) => this.revisionCacheKey(hash),
+      writes: () => this.uploadCount("revision"),
+      corrupt: "Drive 문서 무결성 검사에 실패했습니다.",
+      check: (value) => this.checkRevision(value),
+    });
+  }
+  /** Uploads completed so far for a kind; loaders use it to end shared listings. */
+  uploadCount(kind: string) {
+    return this.uploads.get(kind) ?? 0;
+  }
   async put(kind: string, blob: Blob) {
     const hash = await digest(blob);
     const key = `${this.account}:upload:${this.remote.storageNamespace ? `${this.remote.storageNamespace}:` : ""}${kind}:${hash}`;
     // Search the server as well: a different device may already have uploaded it.
-    const existing = (await this.remote.list(kind))
+    const existing = (await this.remote.list(kind, hash))
       .filter((f) => f.appProperties.key === hash)
       .sort((a, b) => a.id.localeCompare(b.id));
     let id = existing[0]?.id ?? (await this.db.get<string>(key));
@@ -447,73 +494,66 @@ export class DriveRepository {
     }
     if ((await digest(await this.remote.read(id))) !== hash)
       throw new Error("Drive 파일의 체크섬이 일치하지 않습니다.");
+    this.uploads.set(kind, this.uploadCount(kind) + 1);
     return { id, hash };
   }
   private revisionCacheKey(hash: string) {
     return `${this.account}:revision:${this.remote.storageNamespace ?? "default"}:${hash}`;
   }
+  private checkRevision(value: unknown): Revision {
+    const revision = value as Revision;
+    if (
+      !revision ||
+      revision.schema !== 1 ||
+      !(revision.parent === null || typeof revision.parent === "string")
+    )
+      throw new Error("지원하지 않는 Drive 문서입니다.");
+    if (
+      revision.merged !== undefined &&
+      (!Array.isArray(revision.merged) ||
+        revision.merged.some((hash) => typeof hash !== "string"))
+    )
+      throw new Error("잘못된 Drive 병합 이력입니다.");
+    validateIdeas([revision.idea]);
+    if (revision.idea.user_id !== this.account)
+      throw new Error("Drive 문서의 계정이 일치하지 않습니다.");
+    return revision;
+  }
+  /** Every call re-lists the remote; only unseen files are downloaded and hashed. */
   async revisions(
     forceRemote = false,
   ): Promise<{ revision: Revision; hash: string }[]> {
-    const rows: { revision: Revision; hash: string }[] = [];
-    for (const file of await this.remote.list("revision")) {
-      const key = this.revisionCacheKey(file.appProperties.key);
-      let revision = forceRemote ? undefined : await this.db.get<Revision>(key);
-      let hash = file.appProperties.key;
-      if (!revision || (await digest(canonical(revision))) !== hash) {
-        const blob = await this.remote.read(file.id);
-        hash = await digest(blob);
-        if (hash !== file.appProperties.key)
-          throw new Error("Drive 문서 무결성 검사에 실패했습니다.");
-        revision = JSON.parse(await blob.text()) as Revision;
-      }
-      if (
-        revision.schema !== 1 ||
-        !(revision.parent === null || typeof revision.parent === "string")
-      )
-        throw new Error("지원하지 않는 Drive 문서입니다.");
-      if (
-        revision.merged !== undefined &&
-        (!Array.isArray(revision.merged) ||
-          revision.merged.some((hash) => typeof hash !== "string"))
-      )
-        throw new Error("잘못된 Drive 병합 이력입니다.");
-      validateIdeas([revision.idea]);
-      if (revision.idea.user_id !== this.account)
-        throw new Error("Drive 문서의 계정이 일치하지 않습니다.");
-      await this.db.set(key, revision);
-      if (!rows.some((r) => r.hash === hash)) rows.push({ revision, hash });
-    }
-    return rows;
+    return this.loader.load(forceRemote);
   }
+  /** Rows are shared between calls while the set of revisions is unchanged. */
   async list(): Promise<DriveRow[]> {
     const revisions = await this.revisions();
+    const key = revisions
+      .map((r) => r.hash)
+      .sort()
+      .join(",");
+    if (this.snapshot?.key === key) return this.snapshot.rows;
+    const byHash = new Map(revisions.map((r) => [r.hash, r]));
+    const parents = new Set<string | null>();
+    const byIdea = new Map<string, typeof revisions>();
     for (const row of revisions) {
       for (const parent of [
         row.revision.parent,
         ...(row.revision.merged ?? []),
-      ].filter(Boolean)) {
-        if (
-          !revisions.some(
-            (r) =>
-              r.hash === parent && r.revision.idea.id === row.revision.idea.id,
-          )
-        )
+      ].filter(Boolean) as string[]) {
+        if (byHash.get(parent)?.revision.idea.id !== row.revision.idea.id)
           throw new Error(
             "Drive 문서의 이전 버전이 누락되었거나 관계가 잘못되었습니다.",
           );
+        parents.add(parent);
       }
+      const group = byIdea.get(row.revision.idea.id) ?? [];
+      group.push(row);
+      byIdea.set(row.revision.idea.id, group);
     }
-    const parents = new Set(
-      revisions.flatMap((r) => [
-        r.revision.parent,
-        ...(r.revision.merged ?? []),
-      ]),
-    );
-    const ids = new Set(revisions.map((r) => r.revision.idea.id));
-    return [...ids].map((id) => {
-      const heads = revisions
-        .filter((r) => r.revision.idea.id === id && !parents.has(r.hash))
+    const rows = [...byIdea.values()].map((group) => {
+      const heads = group
+        .filter((r) => !parents.has(r.hash))
         .sort((a, b) => a.hash.localeCompare(b.hash));
       if (!heads.length) throw new Error("Drive 문서 이력에 오류가 있습니다.");
       return {
@@ -522,6 +562,8 @@ export class DriveRepository {
         conflicts: heads.length > 1 ? heads.map((h) => h.revision) : [],
       };
     });
+    this.snapshot = { key, rows };
+    return rows;
   }
   async append(idea: Idea, parent: string | null) {
     validateIdeas([idea]);
@@ -532,7 +574,7 @@ export class DriveRepository {
       "revision",
       new Blob([canonical(revision)], { type: "application/json" }),
     );
-    await this.db.set(this.revisionCacheKey(result.hash), revision);
+    await this.loader.remember(result.hash, revision);
     return result.hash;
   }
   async save(idea: Idea, parent: string | null) {
@@ -570,5 +612,13 @@ export class DriveRepository {
 export function activeDriveRepository() {
   const account = current()?.user.id ?? rememberedDriveUser()?.id;
   if (!account) throw new Error("Google Drive 연결이 필요합니다.");
-  return new DriveRepository(account, new GoogleDrive(account));
+  return driveRepositoryFor(account);
+}
+// One repository per account keeps verified revisions in memory across syncs.
+// It holds no token: requests read the live session.
+let shared: DriveRepository | undefined;
+export function driveRepositoryFor(account: string) {
+  if (shared?.account !== account)
+    shared = new DriveRepository(account, new GoogleDrive(account));
+  return shared;
 }

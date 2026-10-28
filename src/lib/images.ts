@@ -4,7 +4,34 @@ import { localDb } from "./local-db";
 import { supabase } from "./supabase";
 import { validateImage } from "./model";
 
-export async function readImage(path: string): Promise<Blob> {
+// Thumbnails of the same picture, or the same picture in many ideas, share one
+// read; a failure is forgotten so the next attempt starts fresh.
+const reading = new Map<string, Promise<Blob>>();
+const DOWNLOADS = 4;
+let downloading = 0;
+const waiting: (() => void)[] = [];
+async function throttled<T>(task: () => Promise<T>): Promise<T> {
+  while (downloading >= DOWNLOADS)
+    await new Promise<void>((resolve) => waiting.push(resolve));
+  downloading++;
+  try {
+    return await task();
+  } finally {
+    downloading--;
+    waiting.shift()?.();
+  }
+}
+export function readImage(path: string): Promise<Blob> {
+  if (!path.startsWith("drive-sha:")) return readImageUncached(path);
+  const key = `${activeDriveRepository().account}:${path}`;
+  let read = reading.get(key);
+  if (!read) {
+    read = readImageUncached(path).finally(() => reading.delete(key));
+    reading.set(key, read);
+  }
+  return read;
+}
+async function readImageUncached(path: string): Promise<Blob> {
   if (/^data:image\/(png|jpeg|webp|gif);base64,/.test(path)) {
     const response = await fetch(path);
     const blob = await response.blob();
@@ -16,14 +43,16 @@ export async function readImage(path: string): Promise<Blob> {
     const repo = activeDriveRepository();
     const cached = await localDb.get<Blob>(`${repo.account}:image:${hash}`);
     if (cached && (await digest(cached)) === hash) return cached;
-    const file = (await repo.remote.list("image")).find(
-      (f) => f.appProperties.key === hash,
-    );
-    if (!file) throw new Error("Drive에서 첨부 이미지를 찾지 못했습니다.");
-    const blob = await repo.remote.read(file.id);
-    if ((await digest(blob)) !== hash) throw new Error("이미지 체크섬 오류");
-    await localDb.set(`${repo.account}:image:${hash}`, blob);
-    return blob;
+    return throttled(async () => {
+      const file = (await repo.remote.list("image", hash)).find(
+        (f) => f.appProperties.key === hash,
+      );
+      if (!file) throw new Error("Drive에서 첨부 이미지를 찾지 못했습니다.");
+      const blob = await repo.remote.read(file.id);
+      if ((await digest(blob)) !== hash) throw new Error("이미지 체크섬 오류");
+      await localDb.set(`${repo.account}:image:${hash}`, blob);
+      return blob;
+    });
   }
   if (!supabase)
     throw new Error(

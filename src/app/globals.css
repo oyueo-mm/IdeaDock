@@ -1821,3 +1821,172 @@ input[type="radio"] {
     max-height: calc(100dvh - 24px);
   }
 }
+
+/* Compact list header, explorer gutters and detail panel.
+   Later rules intentionally override the earlier layout above. */
+.main-content {
+  --pad: 30px;
+  padding: 12px var(--pad) 0;
+}
+@media (min-width: 1500px) {
+  .main-content {
+    --pad: 48px;
+  }
+}
+@media (max-width: 1100px) {
+  .main-content {
+    --pad: 22px;
+  }
+}
+@media (max-width: 850px) {
+  .main-content {
+    --pad: 20px;
+  }
+}
+.topbar,
+.detail-header {
+  height: 40px;
+  min-height: 40px;
+}
+.list-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 6px;
+  flex-shrink: 0;
+}
+.list-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+.list-title-row h1 {
+  font-size: 34px;
+  letter-spacing: -1px;
+  font-weight: 650;
+  line-height: 1.15;
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.list-title-row .sort-field {
+  flex-shrink: 0;
+}
+.list-path-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  min-width: 0;
+}
+.list-path-row .explorer-breadcrumb {
+  flex: 1 1 140px;
+  min-width: 0;
+  margin: 0;
+}
+.list-path-row .explorer-toolbar {
+  flex: 0 0 auto;
+  padding: 0;
+  gap: 6px;
+}
+.list-path-row .explorer-toolbar button {
+  padding: 4px 10px;
+}
+.explorer-list {
+  margin-inline: calc(var(--pad) * -1);
+  padding-inline: var(--pad);
+}
+.explorer-items {
+  user-select: none;
+  -webkit-user-select: none;
+}
+.explorer-items > .idea-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 92px;
+}
+.marquee-active,
+.marquee-active * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+.explorer-list .idea-row.is-selected {
+  background: var(--selected);
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+.idea-row.is-lingering {
+  opacity: 0.6;
+}
+.detail-scroll {
+  padding: 14px 22px 22px;
+}
+.detail-top-meta {
+  margin-bottom: 8px;
+}
+.detail-title {
+  min-height: 0;
+  resize: none;
+  overflow: hidden;
+  display: block;
+  line-height: 1.35;
+}
+.detail-dates {
+  margin: 6px 0 10px;
+}
+.detail-section {
+  padding: 10px 0;
+}
+.section-label {
+  margin-bottom: 8px;
+}
+.tiptap {
+  min-height: 96px;
+  padding: 8px 2px;
+}
+.image-grid {
+  margin-bottom: 8px;
+}
+.upload-area {
+  min-height: 64px;
+  gap: 4px;
+  padding: 10px;
+}
+@media (max-width: 640px) {
+  .main-content {
+    padding-top: 10px;
+  }
+  .topbar {
+    height: 48px;
+    min-height: 48px;
+  }
+  .detail-header {
+    height: 56px;
+    min-height: 56px;
+  }
+  .list-title-row h1 {
+    font-size: 28px;
+  }
+  .detail-scroll {
+    padding: 14px 18px 24px;
+  }
+  .tiptap {
+    min-height: 120px;
+  }
+  .upload-area {
+    min-height: 72px;
+  }
+  /* Notices float above the full-screen detail page: their text must not eat
+     taps meant for the page below, and the page can scroll clear of them. */
+  .sync-alerts:not(:empty) {
+    pointer-events: none;
+  }
+  .sync-alerts:not(:empty) button,
+  .sync-alerts:not(:empty) a {
+    pointer-events: auto;
+  }
+  .app-shell:has(.sync-alerts:not(:empty)) .detail-scroll {
+    padding-bottom: 96px;
+  }
+}

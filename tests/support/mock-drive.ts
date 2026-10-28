@@ -8,7 +8,31 @@ type Stored = {
   mimeType: string;
   bytes: Buffer;
 };
-export function mockDrive() {
+export type DriveStats = {
+  list: number;
+  media: number;
+  upload: number;
+  other: number;
+  mediaKeys: string[];
+};
+const emptyStats = (): DriveStats => ({
+  list: 0,
+  media: 0,
+  upload: 0,
+  other: 0,
+  mediaKeys: [],
+});
+/**
+ * pageSize 1 (default) exercises multi-page listing; benchmarks pass Drive's
+ * real limit of 1000 and a per-request latency to resemble the live API.
+ */
+export function mockDrive(
+  options: { pageSize?: number; latency?: number } = {},
+) {
+  const pageSize = options.pageSize ?? 1;
+  let stats = emptyStats();
+  const failMedia = new Map<string, number>();
+  let slow = 0;
   const files = new Map<string, Stored>();
   const uploads = new Map<string, Omit<Stored, "bytes">>();
   let allocation = 0,
@@ -18,6 +42,20 @@ export function mockDrive() {
   let expired = false;
   return {
     files,
+    /** Returns the counters since the last call and resets them. */
+    takeStats: () => {
+      const taken = stats;
+      stats = emptyStats();
+      return taken;
+    },
+    /** The next `times` downloads of each key answer 503, then succeed. */
+    failMedia: (keys: string[], times = 1) => {
+      for (const key of keys) failMedia.set(key, times);
+    },
+    /** Extra latency for every Drive request, e.g. a slow network. */
+    setSlow: (ms: number) => {
+      slow = ms;
+    },
     expireToken: (value: boolean) => {
       expired = value;
     },
@@ -58,6 +96,25 @@ export function mockDrive() {
           "Access-Control-Expose-Headers": "Location",
         };
         if (expired) return route.fulfill({ headers, status: 401 });
+        const delay = (options.latency ?? 0) + slow;
+        if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+        if (url.searchParams.get("alt") === "media") {
+          stats.media++;
+          const key = files.get(url.pathname.split("/").at(-1)!)?.appProperties
+            .key;
+          if (key) stats.mediaKeys.push(key);
+          const left = key ? (failMedia.get(key) ?? 0) : 0;
+          if (key && left > 0) {
+            failMedia.set(key, left - 1);
+            return route.fulfill({ headers, status: 503 });
+          }
+        } else if (url.pathname.startsWith("/upload/")) stats.upload++;
+        else if (
+          url.pathname === "/drive/v3/files" &&
+          request.method() === "GET"
+        )
+          stats.list++;
+        else stats.other++;
         if (url.pathname.endsWith("generateIds")) {
           expect(url.searchParams.get("space")).toBe("drive");
           return route.fulfill({
@@ -141,16 +198,15 @@ export function mockDrive() {
             : f.appProperties.kind === kind &&
               !!f.parents?.some((id) => parentIds.includes(id)),
         );
-        // Deliberately paginate at one file to exercise multi-page listing.
         const index = Number(url.searchParams.get("pageToken") || 0);
         return route.fulfill({
           headers,
           json: {
             files: rows
-              .slice(index, index + 1)
+              .slice(index, index + pageSize)
               .map(({ id, appProperties }) => ({ id, appProperties })),
-            ...(index + 1 < rows.length
-              ? { nextPageToken: String(index + 1) }
+            ...(index + pageSize < rows.length
+              ? { nextPageToken: String(index + pageSize) }
               : {}),
           },
         });

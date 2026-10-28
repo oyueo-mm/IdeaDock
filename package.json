@@ -15,7 +15,8 @@
     "test:e2e": "playwright test",
     "test:e2e:drive": "node scripts/e2e-drive.mjs",
     "test:security": "node scripts/security-test.mjs",
-    "format": "prettier --write src tests scripts/*.mjs *.json *.ts *.mjs docs/*.md README.md"
+    "format": "prettier --write src tests scripts/*.mjs *.json *.ts *.mjs docs/*.md README.md",
+    "bench": "node scripts/bench.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.80.0",

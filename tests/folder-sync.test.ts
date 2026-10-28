@@ -24,6 +24,7 @@ vi.mock("../src/lib/drive", async (importOriginal) => ({
   },
   driveSessionAccount: () => state.repo?.account ?? null,
 }));
+vi.mock("../src/lib/paint", () => ({ afterPaint: async () => {} }));
 vi.mock("../src/lib/local-db", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/lib/local-db")>();
   return {

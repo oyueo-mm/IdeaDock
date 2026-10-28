@@ -12,6 +12,7 @@ import { type Folder, validateFolders } from "./folders";
 import { canonical, digest } from "./integrity";
 import { localDb } from "./local-db";
 import { registerFolderWrites } from "./folder-sync-gate";
+import { afterPaint } from "./paint";
 
 type Pending = { folder: Folder; parent: string | null; seq: number };
 type Cache = {
@@ -33,6 +34,7 @@ export function useFolders(account: string | undefined) {
     busy = useRef(false),
     initialized = useRef(false),
     sequence = useRef(0),
+    applied = useRef<{ rows: unknown; sequence: number } | null>(null),
     disk = useRef(Promise.resolve());
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const syncRef = useRef<() => Promise<void>>(async () => {});
@@ -71,6 +73,12 @@ export function useFolders(account: string | undefined) {
       throw new Error("폴더 동기화 계정이 변경되었습니다.");
     const rows = await new FolderRepository(active).list();
     if (epoch !== generation.current || seq !== sequence.current) return;
+    // Same revisions as last time and no local edit since: nothing to apply.
+    if (
+      applied.current?.rows === rows &&
+      applied.current.sequence === sequence.current
+    )
+      return;
     const next = rows.map(
       (r) => cache.current.pending[r.folder.id]?.folder ?? r.folder,
     );
@@ -98,6 +106,7 @@ export function useFolders(account: string | undefined) {
         cache.current.heads[r.folder.id] = r.head;
     cache.current.folders = next;
     publish();
+    applied.current = { rows, sequence: sequence.current };
     await persist();
   }
   async function flush() {
@@ -184,6 +193,7 @@ export function useFolders(account: string | undefined) {
     owner.current = account;
     initialized.current = false;
     busy.current = false;
+    applied.current = null;
     cache.current = empty();
     setConflicts([]);
     setError("");
@@ -221,6 +231,8 @@ export function useFolders(account: string | undefined) {
         initialized.current = true;
         publish();
         setReady(true);
+        await afterPaint();
+        if (epoch !== generation.current) return;
         await syncRef.current();
       } catch (e) {
         if (epoch === generation.current) setError(String(e));
@@ -243,10 +255,13 @@ export function useFolders(account: string | undefined) {
     };
   }, [account]);
   useEffect(() => {
-    const run = () =>
+    const run = () => {
+      // A hidden tab stays quiet and catches up when it is shown again.
+      if (document.hidden) return;
       void syncRef.current().catch((e) => {
         if (!(e instanceof DriveAuthError)) setError(String(e));
       });
+    };
     // Sync as soon as a reconnect delivers a token for this workspace.
     const unsubscribe = subscribeDriveSession(() => {
       if (owner.current && driveSessionAccount() === owner.current) run();
@@ -262,11 +277,13 @@ export function useFolders(account: string | undefined) {
     };
     const interval = setInterval(run, 15000);
     window.addEventListener("online", run);
+    document.addEventListener("visibilitychange", run);
     window.addEventListener("beforeunload", leave);
     return () => {
       unsubscribe();
       clearInterval(interval);
       window.removeEventListener("online", run);
+      document.removeEventListener("visibilitychange", run);
       window.removeEventListener("beforeunload", leave);
       if (timer.current) clearTimeout(timer.current);
     };

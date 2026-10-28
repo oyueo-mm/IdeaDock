@@ -20,6 +20,8 @@ function setSession(account: string | null) {
   state.session = account;
   state.listeners.forEach((listener) => listener());
 }
+// Waiting for a browser paint is not what these tests are about.
+vi.mock("../src/lib/paint", () => ({ afterPaint: async () => {} }));
 vi.mock("../src/lib/local-db", () => ({
   localDb: {
     get: async (key: string) => structuredClone(state.disk.get(key)),
@@ -53,6 +55,11 @@ vi.mock("../src/lib/drive", () => ({
     return () => state.listeners.delete(listener);
   },
   DriveAuthError: class DriveAuthError extends Error {},
+  driveRepositoryFor: () => ({
+    save: state.save,
+    list: state.list,
+    join: state.join,
+  }),
   GoogleDrive: class {},
   DriveRepository: class {
     save = state.save;

@@ -1,6 +1,7 @@
 import { DriveRepository } from "./drive";
 import { canonical, digest } from "./integrity";
 import { type Folder, validateFolders } from "./folders";
+import { RevisionLoader } from "./revision-loader";
 
 export type FolderRevision = {
   schema: 1;
@@ -13,69 +14,89 @@ export type FolderRow = {
   head: string;
   conflicts: FolderRevision[];
 };
+// Repositories are created per call, so the verified-revision memory lives with
+// the (shared) DriveRepository instead.
+const loaders = new WeakMap<DriveRepository, RevisionLoader<FolderRevision>>();
+const snapshots = new WeakMap<
+  DriveRepository,
+  { key: string; rows: FolderRow[] }
+>();
+function checkFolderRevision(
+  ideas: DriveRepository,
+  revision: FolderRevision,
+): FolderRevision {
+  if (
+    !revision ||
+    revision.schema !== 1 ||
+    !(revision.parent === null || typeof revision.parent === "string") ||
+    (revision.merged !== undefined &&
+      (!Array.isArray(revision.merged) ||
+        revision.merged.some((h) => typeof h !== "string")))
+  )
+    throw new Error("폴더 리비전 형식 오류");
+  // Validate one record without requiring its ancestors in this revision.
+  validateFolders([{ ...revision.folder, parent_id: null }]);
+  if (
+    revision.folder.user_id !== ideas.account ||
+    !(
+      revision.folder.parent_id === null ||
+      typeof revision.folder.parent_id === "string"
+    )
+  )
+    throw new Error("폴더 계정 또는 상위 관계 오류");
+  return revision;
+}
 // Logical folders are separate immutable documents, never physical Drive folders.
 export class FolderRepository {
   constructor(readonly ideas: DriveRepository) {}
-  async revisions(force = false) {
-    const rows: { revision: FolderRevision; hash: string }[] = [];
-    for (const f of await this.ideas.remote.list("folder-revision")) {
-      const key = `${this.ideas.account}:folder-revision:${this.ideas.remote.storageNamespace ?? "default"}:${f.appProperties.key}`;
-      let revision = force
-        ? undefined
-        : await this.ideas.db.get<FolderRevision>(key);
-      if (
-        !revision ||
-        (await digest(canonical(revision))) !== f.appProperties.key
-      ) {
-        const bytes = await this.ideas.remote.read(f.id);
-        if ((await digest(bytes)) !== f.appProperties.key)
-          throw new Error("폴더 리비전 체크섬 오류");
-        revision = JSON.parse(await bytes.text());
-      }
-      if (
-        !revision ||
-        revision.schema !== 1 ||
-        !(revision.parent === null || typeof revision.parent === "string") ||
-        (revision.merged !== undefined &&
-          (!Array.isArray(revision.merged) ||
-            revision.merged.some((h) => typeof h !== "string")))
-      )
-        throw new Error("폴더 리비전 형식 오류");
-      // Validate one record without requiring its ancestors in this revision.
-      validateFolders([{ ...revision.folder, parent_id: null }]);
-      if (
-        revision.folder.user_id !== this.ideas.account ||
-        !(
-          revision.folder.parent_id === null ||
-          typeof revision.folder.parent_id === "string"
-        )
-      )
-        throw new Error("폴더 계정 또는 상위 관계 오류");
-      await this.ideas.db.set(key, revision);
-      if (!rows.some((r) => r.hash === f.appProperties.key))
-        rows.push({ revision, hash: f.appProperties.key });
+  private get loader() {
+    let loader = loaders.get(this.ideas);
+    if (!loader) {
+      const ideas = this.ideas;
+      loader = new RevisionLoader<FolderRevision>({
+        remote: ideas.remote,
+        db: ideas.db,
+        kind: "folder-revision",
+        cacheKey: (hash) =>
+          `${ideas.account}:folder-revision:${ideas.remote.storageNamespace ?? "default"}:${hash}`,
+        writes: () => ideas.uploadCount("folder-revision"),
+        corrupt: "폴더 리비전 체크섬 오류",
+        check: (value) => checkFolderRevision(ideas, value as FolderRevision),
+      });
+      loaders.set(ideas, loader);
     }
-    return rows;
+    return loader;
   }
+  async revisions(force = false) {
+    return this.loader.load(force);
+  }
+  /** Rows are shared between calls while the set of revisions is unchanged. */
   async list(): Promise<FolderRow[]> {
     const all = await this.revisions();
-    for (const r of all)
+    const key = all
+      .map((r) => r.hash)
+      .sort()
+      .join(",");
+    const known = snapshots.get(this.ideas);
+    if (known?.key === key) return known.rows;
+    const byHash = new Map(all.map((r) => [r.hash, r]));
+    const parents = new Set<string | null>();
+    const byFolder = new Map<string, typeof all>();
+    for (const r of all) {
       for (const p of [r.revision.parent, ...(r.revision.merged ?? [])].filter(
         Boolean,
-      ))
-        if (
-          !all.some(
-            (x) =>
-              x.hash === p && x.revision.folder.id === r.revision.folder.id,
-          )
-        )
+      ) as string[]) {
+        if (byHash.get(p)?.revision.folder.id !== r.revision.folder.id)
           throw new Error("폴더 이력 관계 누락");
-    const parents = new Set(
-      all.flatMap((r) => [r.revision.parent, ...(r.revision.merged ?? [])]),
-    );
-    return [...new Set(all.map((r) => r.revision.folder.id))].map((id) => {
-      const heads = all
-        .filter((r) => r.revision.folder.id === id && !parents.has(r.hash))
+        parents.add(p);
+      }
+      const group = byFolder.get(r.revision.folder.id) ?? [];
+      group.push(r);
+      byFolder.set(r.revision.folder.id, group);
+    }
+    const rows = [...byFolder.values()].map((group) => {
+      const heads = group
+        .filter((r) => !parents.has(r.hash))
         .sort((a, b) => a.hash.localeCompare(b.hash));
       if (!heads.length) throw new Error("폴더 이력 순환 오류");
       return {
@@ -84,6 +105,8 @@ export class FolderRepository {
         conflicts: heads.length > 1 ? heads.map((h) => h.revision) : [],
       };
     });
+    snapshots.set(this.ideas, { key, rows });
+    return rows;
   }
   async append(folder: Folder, parent: string | null, merged?: string[]) {
     if (folder.user_id !== this.ideas.account)
@@ -95,12 +118,12 @@ export class FolderRepository {
       folder,
       ...(merged ? { merged: [...merged].sort() } : {}),
     };
-    return (
-      await this.ideas.put(
-        "folder-revision",
-        new Blob([canonical(revision)], { type: "application/json" }),
-      )
-    ).hash;
+    const { hash } = await this.ideas.put(
+      "folder-revision",
+      new Blob([canonical(revision)], { type: "application/json" }),
+    );
+    await this.loader.remember(hash, revision);
+    return hash;
   }
   async save(folder: Folder, parent: string | null) {
     const rows = await this.list();
