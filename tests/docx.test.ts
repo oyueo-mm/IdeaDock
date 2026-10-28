@@ -232,3 +232,57 @@ describe("Word import approvals, recovery and integrity", () => {
     expect(await remote.list("revision")).toHaveLength(2);
   });
 });
+
+describe("Word import request volume", () => {
+  it("does not re-download the existing ideas for every imported item", async () => {
+    const { repo, remote } = setup();
+    for (let i = 0; i < 60; i++)
+      await repo.save(
+        { ...makeIdea(`기존 ${i}`, "alice"), plain_text: `본문 ${i}` },
+        null,
+      );
+    const existing = (await repo.list()).map((r) => r.idea);
+    const p = await parseDocx(file(), "alice", existing);
+    const reads: string[] = [];
+    const read = remote.read.bind(remote);
+    remote.read = async (id) => {
+      reads.push(remote.files.get(id)?.appProperties.kind ?? "?");
+      return read(id);
+    };
+    const progress = await importWord(p, existing, [], repo, {
+      account: "alice",
+      file: p.fileHash,
+      warnings: true,
+      merge: false,
+    });
+    expect(progress.state).toBe("verified");
+    expect(progress.done).toHaveLength(2);
+    expect(progress.stages?.map((s) => s.stage)).toEqual([
+      "복구 백업을 Drive에 저장",
+      "이미지 저장",
+      "아이디어 저장",
+      "서버 재조회 검증",
+    ]);
+    // two ideas, one picture, two backups: a few reads, not 2 × 60
+    expect(
+      reads.filter((kind) => kind === "revision").length,
+    ).toBeLessThanOrEqual(4);
+    expect(reads.length).toBeLessThan(15);
+    expect(await repo.list()).toHaveLength(62);
+    // a second run recognises its own work and writes nothing more
+    const before = remote.files.size;
+    await importWord(
+      p,
+      (await repo.list()).map((r) => r.idea),
+      [],
+      repo,
+      {
+        account: "alice",
+        file: p.fileHash,
+        warnings: true,
+        merge: false,
+      },
+    );
+    expect(remote.files.size).toBe(before);
+  });
+});

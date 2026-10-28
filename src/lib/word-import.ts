@@ -10,12 +10,17 @@ import {
   type MigrationBackup,
 } from "./migration";
 import { dataUrl, readImage } from "./images";
+import { StageTimer, type StageTiming } from "./stage-timer";
 
 export type WordImportProgress = {
   done: string[];
   total: number;
   state: "uploading" | "failed" | "verified";
   error?: string;
+  /** What is happening now, in words for the user. */
+  stage?: string;
+  /** Finished stages with their time and Drive request counts. */
+  stages?: StageTiming[];
 };
 type PlanItem = { idea: Idea; parent: string | null; already?: boolean };
 type Plan = {
@@ -214,75 +219,91 @@ export async function importWord(
     total: plan.items.length,
     state: "uploading",
   };
+  const timer = new StageTimer(() => repo.remote.stats?.());
   const publish = async () => {
+    progress.stages = [...timer.stages];
     await repo.db.set(`${key}:progress`, progress);
     onProgress(structuredClone(progress));
   };
+  const stage = async <T>(name: string, run: () => Promise<T>) => {
+    progress.stage = name;
+    await publish();
+    return timer.run(name, run);
+  };
   await publish();
   try {
-    await repo.put(
-      "backup",
-      new Blob([canonical(plan.recovery)], { type: "application/json" }),
+    await stage("복구 백업을 Drive에 저장", () =>
+      repo.putMany("backup", [
+        new Blob([canonical(plan.recovery)], { type: "application/json" }),
+        new Blob([canonical(plan.importBackup)], { type: "application/json" }),
+      ]),
     );
-    await repo.put(
-      "backup",
-      new Blob([canonical(plan.importBackup)], { type: "application/json" }),
-    );
-    for (const item of plan.items) {
-      if (item.already) {
-        const reread = await repo.revisions(true);
-        if (
-          !reread.some(
-            (r) => canonical(r.revision.idea) === canonical(item.idea),
-          )
-        )
-          throw new Error(
-            "기존 가져오기 문서를 재조회하여 확인하지 못했습니다.",
-          );
-        for (const image of item.idea.images) {
-          const hash = image.storage_path.slice(10),
-            file = (await repo.remote.list("image")).find(
-              (f) => f.appProperties.key === hash,
-            );
-          if (!file || (await digest(await repo.remote.read(file.id))) !== hash)
-            throw new Error("기존 가져오기 이미지 검증 실패");
-        }
-        progress.done.push(item.idea.id);
-        await publish();
-        continue;
+    // Items already imported by an earlier run need no write; they are re-read
+    // from Drive in the final stage like everything else.
+    const todo = plan.items.filter((item) => !item.already);
+    for (const item of plan.items)
+      if (item.already) progress.done.push(item.idea.id);
+    await publish();
+    const pictures = new Map<string, string>();
+    await stage("이미지 저장", async () => {
+      const paths = [
+        ...new Set(
+          todo.flatMap((item) =>
+            item.idea.images
+              .map((image) => image.storage_path)
+              .filter((path) => !path.startsWith("drive-sha:")),
+          ),
+        ),
+      ];
+      const blobs = await Promise.all(paths.map((path) => readImage(path)));
+      const hashes = await repo.putMany("image", blobs, { readBack: false });
+      for (const [i, path] of paths.entries()) {
+        pictures.set(path, `drive-sha:${hashes[i]}`);
+        await repo.db.set(`${repo.account}:image:${hashes[i]}`, blobs[i]);
       }
-      const idea = structuredClone(item.idea),
-        paths = new Map<string, string>();
-      for (const image of idea.images) {
-        if (image.storage_path.startsWith("drive-sha:")) continue;
-        const blob = await readImage(image.storage_path),
-          { hash } = await repo.put("image", blob);
-        paths.set(image.storage_path, `drive-sha:${hash}`);
-        await repo.db.set(`${repo.account}:image:${hash}`, blob);
-        image.storage_path = `drive-sha:${hash}`;
-      }
+    });
+    const prepared = todo.map((item) => {
+      const idea = structuredClone(item.idea);
+      for (const image of idea.images)
+        image.storage_path =
+          pictures.get(image.storage_path) ?? image.storage_path;
       for (const node of imageNodes(idea.content)) {
         const a = node.attrs as Record<string, unknown>;
-        a.storage_path = paths.get(String(a.storage_path)) ?? a.storage_path;
+        a.storage_path = pictures.get(String(a.storage_path)) ?? a.storage_path;
       }
-      const saved = await repo.save(idea, item.parent);
-      const actual = (await repo.revisions(true)).find(
-        (r) => r.hash === saved.head,
+      return { idea, parent: item.parent };
+    });
+    const heads: { idea: Idea; head: string }[] = [];
+    await stage("아이디어 저장", async () => {
+      // Checked against the server in the final stage.
+      const saved = await repo.saveMany(prepared, {
+        readBack: false,
+        onDone: async (i) => {
+          progress.done.push(prepared[i].idea.id);
+          await publish();
+        },
+      });
+      heads.push(...saved);
+    });
+    await stage("서버 재조회 검증", async () => {
+      const expected = [
+        ...plan.items
+          .filter((item) => item.already)
+          .map((item) => ({ idea: item.idea, head: item.parent! })),
+        ...heads,
+      ];
+      const reread = await repo.verifyRevisions(expected.map((e) => e.head));
+      for (const e of expected)
+        if (canonical(reread.get(e.head)?.idea) !== canonical(e.idea))
+          throw new Error("가져온 문서를 재조회하여 검증하지 못했습니다.");
+      await repo.verifyImages(
+        expected.flatMap((e) =>
+          e.idea.images.map((image) => image.storage_path.slice(10)),
+        ),
       );
-      if (!actual || canonical(actual.revision.idea) !== canonical(saved.idea))
-        throw new Error("가져온 문서를 재조회하여 검증하지 못했습니다.");
-      for (const image of saved.idea.images) {
-        const hash = image.storage_path.slice(10),
-          file = (await repo.remote.list("image")).find(
-            (f) => f.appProperties.key === hash,
-          );
-        if (!file || (await digest(await repo.remote.read(file.id))) !== hash)
-          throw new Error("이미지 재조회 검증 실패");
-      }
-      progress.done.push(idea.id);
-      await publish();
-    }
+    });
     progress.state = "verified";
+    progress.stage = undefined;
     await publish();
     return progress;
   } catch (e) {
