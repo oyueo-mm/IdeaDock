@@ -281,9 +281,9 @@ describe("safe migration", () => {
   it("does not mark the migration verified if the final remote image read is corrupt", async () => {
     const { repo, remote, backup, approved, db } = await fixture();
     const originalRead = remote.read.bind(remote);
-    let reads = 0;
+    // Uploads are checked once, in the final server reread: it must catch this.
     remote.read = async (id) => {
-      if (remote.files.get(id)?.appProperties.kind === "image" && ++reads > 1)
+      if (remote.files.get(id)?.appProperties.kind === "image")
         return new Blob(["corrupt"]);
       return originalRead(id);
     };
