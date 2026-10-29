@@ -190,7 +190,9 @@ test("approval, image backup, repeated migration and second-device reload", asyn
     await expect(
       second.getByRole("article").filter({ hasText: "휴지통 아이디어" }),
     ).toHaveCount(1);
-    await expect(second.getByText("이전한 아이디어").first()).toBeVisible();
+    // Provenance stays in the data (checked in the revision above); the list
+    // no longer labels it.
+    await expect(second.getByText("이전한 아이디어")).toHaveCount(0);
     expect(
       await second.evaluate(() => localStorage.getItem("ideadock:data:demo")),
     ).toBeNull();
