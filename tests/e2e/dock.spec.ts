@@ -27,6 +27,7 @@ test("sidebar creation, autosave, completion and reload", async ({ page }) => {
 });
 test("tags, safe links, trash and restore", async ({ page }) => {
   await createIdea(page, "푸리에 시각화");
+  await page.getByRole("button", { name: "태그 추가" }).click();
   await page.getByRole("textbox", { name: "태그 추가" }).fill("수학");
   await page.getByRole("textbox", { name: "태그 추가" }).press("Enter");
   await page.getByRole("button", { name: "관련 링크 추가" }).click();

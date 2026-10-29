@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   makeIdea,
   selectIdeas,
+  shortcutLinks,
   validUrl,
   validateImage,
 } from "../src/lib/model";
@@ -68,5 +69,32 @@ describe("idea library", () => {
     expect(selectIdeas(batch, "all", "", "생각 499", "updated")).toHaveLength(
       1,
     );
+  });
+});
+describe("list row link shortcuts", () => {
+  const link = (type: "github" | "website", url: string) => ({
+    id: url,
+    type,
+    label: type,
+    url,
+  });
+  it("picks the first safe link of each type and keeps types apart", () => {
+    const links = [
+      link("website", "javascript:alert(1)"),
+      link("github", "https://github.com/a/one"),
+      link("website", "https://one.example.com"),
+      link("website", "https://two.example.com"),
+      link("github", "https://github.com/a/two"),
+    ];
+    expect(shortcutLinks(links)).toEqual({
+      github: links[1],
+      website: links[2],
+    });
+  });
+  it("has nothing for ideas without links", () => {
+    expect(shortcutLinks([])).toEqual({
+      github: undefined,
+      website: undefined,
+    });
   });
 });

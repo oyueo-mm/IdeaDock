@@ -607,17 +607,31 @@ test("the list header is compact and the detail panel packs its sections", async
   await expect(title).toBeVisible();
   const one = await box(title);
   expect(one.height).toBeLessThan(40); // a short title uses one line
-  const dates = await box(page.locator(".detail-dates"));
-  expect(dates.y - (one.y + one.height)).toBeLessThanOrEqual(12);
-  const tags = await box(page.locator(".detail-section").first());
-  expect(tags.y - (dates.y + dates.height)).toBeLessThanOrEqual(14);
+  // The body starts right under the title: toolbar first, then the editor.
   const toolbar = await box(page.locator(".editor-toolbar"));
+  expect(toolbar.y - (one.y + one.height)).toBeLessThanOrEqual(12);
   const body = await box(page.locator(".tiptap"));
   expect(body.y - (toolbar.y + toolbar.height)).toBeLessThanOrEqual(8);
-  expect(body.height).toBeLessThanOrEqual(mobile ? 135 : 110);
-  // Attachments sit right under the memo, not below an empty links block.
-  const images = await box(page.locator(".image-grid"));
-  expect(images.y - (body.y + body.height)).toBeLessThanOrEqual(64);
+  expect(body.height).toBeGreaterThanOrEqual(mobile ? 180 : 260);
+  // Then tags, links and dates, with the reference images last.
+  const order = await page
+    .locator(
+      ".detail-scroll > .memo-section, .detail-scroll > .detail-section, .detail-scroll > .detail-dates",
+    )
+    .evaluateAll((els) =>
+      els.map((el) =>
+        el.classList.contains("memo-section")
+          ? "body"
+          : el.classList.contains("detail-dates")
+            ? "dates"
+            : el.querySelector(".image-grid")
+              ? "images"
+              : el.querySelector(".editable-tags")
+                ? "tags"
+                : "links",
+      ),
+    );
+  expect(order).toEqual(["body", "tags", "links", "dates", "images"]);
   // A long title grows the box, and nothing scrolls sideways.
   await title.fill("아주 긴 제목 ".repeat(14));
   await expect
