@@ -65,7 +65,7 @@ https://oyueo-mm.github.io
 http://localhost:3000
 ```
 
-`/IdeaDock/`, `/#idea=...`, 와일드카드는 넣지 않습니다. 사용자가 공개 원본 추가를 완료했다고 확인했습니다. GIS token model에는 앱 서버 callback이나 Client Secret이 필요하지 않습니다. 기존 Cloud 프로젝트·OAuth 클라이언트·Drive API·`drive.file` 권한을 유지하여 기존 폴더와 데이터의 접근 관계를 보존합니다.
+`/IdeaDock/`, `/#idea=...`, 와일드카드는 넣지 않습니다. Cloudflare 시험 배포를 쓰면 `https://ideadock.pages.dev` 원본과 리디렉션 URI `https://ideadock.pages.dev/api/auth/callback`을 같은 클라이언트에 추가합니다([Cloudflare 안내](CLOUDFLARE.md)). 기존 항목은 지우지 않습니다. 사용자가 공개 원본 추가를 완료했다고 확인했습니다. GIS token model에는 앱 서버 callback이나 Client Secret이 필요하지 않습니다. 기존 Cloud 프로젝트·OAuth 클라이언트·Drive API·`drive.file` 권한을 유지하여 기존 폴더와 데이터의 접근 관계를 보존합니다.
 
 ## PWA 설치
 

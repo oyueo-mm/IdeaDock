@@ -27,7 +27,12 @@ const emptyStats = (): DriveStats => ({
  * real limit of 1000 and a per-request latency to resemble the live API.
  */
 export function mockDrive(
-  options: { pageSize?: number; latency?: number } = {},
+  options: {
+    pageSize?: number;
+    latency?: number;
+    /** Reject bearer tokens the (mock) Google server no longer accepts. */
+    accepts?: (token: string) => Promise<boolean>;
+  } = {},
 ) {
   const pageSize = options.pageSize ?? 1;
   let stats = emptyStats();
@@ -96,6 +101,14 @@ export function mockDrive(
           "Access-Control-Expose-Headers": "Location",
         };
         if (expired) return route.fulfill({ headers, status: 401 });
+        if (options.accepts) {
+          const bearer = (request.headers().authorization ?? "").replace(
+            /^Bearer /,
+            "",
+          );
+          if (!(await options.accepts(bearer)))
+            return route.fulfill({ headers, status: 401 });
+        }
         const delay = (options.latency ?? 0) + slow;
         if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
         if (url.searchParams.get("alt") === "media") {

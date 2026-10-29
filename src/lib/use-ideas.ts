@@ -10,8 +10,10 @@ import { Idea, makeIdea } from "./model";
 import { validateIdeas } from "./integrity";
 import { localDb } from "./local-db";
 import {
+  authMode,
   connectDrive,
   disconnectDrive,
+  driveAuthState,
   DriveAuthError,
   DriveRepository,
   driveRepositoryFor,
@@ -23,8 +25,12 @@ import {
   driveCacheKey,
   rememberDriveUser,
   rememberedDriveUser,
+  restoreServerSession,
   Revision,
+  serverToken,
+  signOutServer,
   subscribeDriveSession,
+  takeAuthResult,
 } from "./drive";
 import { useLegacyIdeas } from "./use-legacy-ideas";
 import { waitForFolderWrites } from "./folder-sync-gate";
@@ -42,6 +48,26 @@ export function useDriveSession() {
     subscribeDriveSession,
     driveSessionAccount,
     () => null,
+  );
+}
+/** Server-mode sign-in state; see ServerAuthState in drive.ts. */
+export function useDriveAuthState() {
+  return useSyncExternalStore(
+    subscribeDriveSession,
+    driveAuthState,
+    () => "restoring" as const,
+  );
+}
+/** Unsaved ideas or folders this device holds for an account. */
+async function hasDrafts(account: string) {
+  const [ideas, folders] = await Promise.all([
+    localDb.get<{ pending?: object }>(driveCacheKey(account)),
+    localDb.get<{ pending?: object }>(`${driveCacheKey(account)}:folders:v2`),
+  ]);
+  return (
+    Object.keys(ideas?.pending ?? {}).length +
+      Object.keys(folders?.pending ?? {}).length >
+    0
   );
 }
 export function useDriveIdeas() {
@@ -226,15 +252,55 @@ export function useDriveIdeas() {
     }
   }, [persist, publish, report]);
   useEffect(() => {
-    if (driveConfigured) void loadGoogle().catch(report);
+    if (authMode === "token" && driveConfigured)
+      void loadGoogle().catch(report);
   }, [report]);
   useEffect(() => {
     // Reopen the last workspace from its device cache; Drive reconnects on
     // demand. Runs after hydration because storage is browser-only.
     const remembered = rememberedDriveUser();
     if (remembered) setUser((prev) => prev ?? remembered);
-    setRestored(true);
+    if (authMode === "token") {
+      setRestored(true);
+      return;
+    }
+    // Server mode: the cached workspace shows at once and the session is
+    // restored behind it. Without a cached workspace the welcome screen waits
+    // for the answer instead of flashing.
+    if (remembered) setRestored(true);
+    const result = takeAuthResult();
+    if (result) setError(result);
+    let live = true;
+    void restoreServerSession().then(async (reply) => {
+      if (!live) return;
+      if (reply.ok && reply.user.id !== remembered?.id) {
+        // Never carry another account's unsaved drafts into this session.
+        if (remembered && (await hasDrafts(remembered.id))) {
+          disconnectDrive();
+          setError(
+            `${remembered.email} 계정의 미저장 초안이 있습니다. 그 계정으로 다시 로그인한 후 저장하세요.`,
+          );
+        } else setUser(reply.user);
+      }
+      if (live) setRestored(true);
+    });
+    return () => {
+      live = false;
+    };
   }, []);
+  // Server mode: while offline or Google is unreachable, keep the session and
+  // retry quietly; the drafts wait on the device.
+  const authState = useDriveAuthState();
+  useEffect(() => {
+    if (authMode !== "server" || authState !== "unavailable") return;
+    const retry = () => void serverToken();
+    const interval = setInterval(retry, 60_000);
+    window.addEventListener("online", retry);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("online", retry);
+    };
+  }, [authState]);
   useEffect(() => {
     if (user) rememberDriveUser(user);
   }, [user]);
@@ -432,6 +498,10 @@ export function useDriveIdeas() {
     user,
     demo,
     connected,
+    /** Server mode: the session is really gone, so offer "Google 다시 로그인". */
+    signedOut: authMode === "server" && authState === "signed-out",
+    /** Server mode: offline or Google unreachable; the session is kept. */
+    authWaiting: authMode === "server" && authState === "unavailable",
     ready: restored,
     ideas,
     status,
@@ -460,6 +530,7 @@ export function useDriveIdeas() {
             "미저장 초안이 있어 계정을 전환할 수 없습니다. 먼저 저장하거나 백업하세요.",
           );
         // Reauthorization is allowed, but account switching with drafts is not.
+        await persist();
         const next = await connectDrive(hint);
         if (next.id !== user.id) {
           disconnectDrive();
@@ -487,7 +558,24 @@ export function useDriveIdeas() {
         return;
       }
       await persist();
-      if (!demo) forgetDriveUser();
+      if (!demo) {
+        await signOutServer();
+        forgetDriveUser();
+      }
+      setUser(null);
+      setDemo(false);
+    },
+    /** Server mode: end every session of this account and revoke its grant. */
+    signOutEverywhere: async () => {
+      if (Object.keys(cache.current.pending).length) {
+        setError(
+          "Drive에 저장되지 않은 초안이 있습니다. 저장 또는 백업 후 로그아웃하세요.",
+        );
+        return;
+      }
+      await persist();
+      await signOutServer(true);
+      forgetDriveUser();
       setUser(null);
       setDemo(false);
     },

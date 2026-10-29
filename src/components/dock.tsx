@@ -40,6 +40,7 @@ import {
   removeImageContent,
 } from "@/lib/model";
 import { supabase } from "@/lib/supabase";
+import { authMode } from "@/lib/drive";
 import Editor from "./editor";
 import { useFolders } from "@/lib/use-folders";
 import { folderTrashed } from "@/lib/folders";
@@ -358,11 +359,19 @@ export default function Dock() {
     }
   }
   const authenticated = !!store.user || store.demo;
-  const reconnect =
+  const server = store.backend === "drive" && authMode === "server";
+  const disconnected =
     store.backend === "drive" &&
     !!store.user &&
     !store.demo &&
     !store.connected;
+  // Server mode asks for a sign-in only when the session is really gone;
+  // while it is being restored or Google is unreachable, it waits quietly.
+  const reconnect =
+    disconnected && (!server || ("signedOut" in store && store.signedOut));
+  const authWaiting =
+    disconnected && server && "authWaiting" in store && store.authWaiting;
+  const loginLabel = server ? "Google 다시 로그인" : "Drive 다시 연결";
   return (
     <div
       className="app-shell"
@@ -651,10 +660,17 @@ export default function Dock() {
             {reconnect && (
               <div className="sync-notice reconnect-notice" role="status">
                 <span>
-                  Google Drive 연결이 필요합니다. 변경 내용은 이 기기에
-                  보관됩니다.
+                  {server
+                    ? "Google 로그인이 필요합니다. 변경 내용은 이 기기에 보관됩니다."
+                    : "Google Drive 연결이 필요합니다. 변경 내용은 이 기기에 보관됩니다."}
                 </span>
-                <button onClick={() => login()}>Drive 다시 연결</button>
+                <button onClick={() => login()}>{loginLabel}</button>
+              </div>
+            )}
+            {authWaiting && !offline && (
+              <div className="sync-notice" role="status">
+                Google 연결을 기다리는 중입니다. 변경 내용은 이 기기에
+                보관됩니다.
               </div>
             )}
             {authenticated && !store.demo && store.pendingCount > 0 && (
@@ -851,7 +867,7 @@ export default function Dock() {
             {store.user && store.backend === "drive" && (
               <>
                 <button className="settings-button" onClick={() => login()}>
-                  Google Drive 다시 연결
+                  {server ? "Google 다시 로그인" : "Google Drive 다시 연결"}
                 </button>
                 <button className="settings-button" onClick={() => login(true)}>
                   다른 Google 계정으로 전환
@@ -898,6 +914,33 @@ export default function Dock() {
                 {store.demo ? "체험 모드 나가기" : "로그아웃"}
               </button>
             )}
+            {server &&
+              store.user &&
+              !store.demo &&
+              "signOutEverywhere" in store && (
+                <button
+                  className="settings-button"
+                  onClick={async () => {
+                    if (folderStore.pendingCount) {
+                      store.setError(
+                        "미저장 폴더 변경이 있습니다. 동기화하거나 백업한 후 로그아웃하세요.",
+                      );
+                      return;
+                    }
+                    try {
+                      await store.signOutEverywhere();
+                      setSettings(false);
+                    } catch (error) {
+                      store.setError(
+                        error instanceof Error ? error.message : String(error),
+                      );
+                    }
+                  }}
+                >
+                  <LogOut size={15} />
+                  모든 기기에서 로그아웃
+                </button>
+              )}
           </section>
         </div>
       )}

@@ -15,3 +15,6 @@ next-env.d.ts
 
 # Local benchmark output (npm run bench)
 /bench-results/
+/dist-cloudflare/
+.wrangler/
+.dev.vars

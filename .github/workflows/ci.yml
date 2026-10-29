@@ -26,6 +26,8 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
       - run: npm run test:e2e:drive
+      # Server sign-in mode (Cloudflare build) against the local mock deployment.
+      - run: npm run test:e2e:server
       # The mock OAuth build must never become the public artifact.
       - name: Rebuild the real static site
         run: npm run build

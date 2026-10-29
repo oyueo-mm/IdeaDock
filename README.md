@@ -69,7 +69,7 @@ docs/                      설정 절차와 검증 결과
 
 ## 저장과 보안
 
-기본 모드는 Google Identity Services와 drive.file 권한으로 사용자가 선택한 Google 계정의 일반 Drive에 IdeaDock 폴더를 만들고 문서 변경 이력과 이미지 원본을 저장합니다. 접근 토큰은 탭 단위 `sessionStorage`에 최대 1시간만 보관하므로 같은 탭의 새로고침에서는 연결이 유지됩니다. 앱을 다시 실행하면 마지막 계정의 기기 캐시가 바로 열리고, **Drive 다시 연결** 한 번으로 계정 선택 없이 재연결합니다. 정적 호스팅의 한계와 보안 검토는 [로그인 유지](docs/AUTH.md)에 있습니다. 기기의 IndexedDB에는 계정별 초안과 업로드 재시도 정보가 남습니다. 저장 충돌이 나면 덮어쓰지 않고 복사본으로 보존할 수 있습니다. 이전한 아이디어는 원래 ID와 `provenance`를 갖고 새 아이디어와 구분됩니다.
+기본 모드는 Google Identity Services와 drive.file 권한으로 사용자가 선택한 Google 계정의 일반 Drive에 IdeaDock 폴더를 만들고 문서 변경 이력과 이미지 원본을 저장합니다. 접근 토큰은 탭 단위 `sessionStorage`에 최대 1시간만 보관하므로 같은 탭의 새로고침에서는 연결이 유지됩니다. 앱을 다시 실행하면 마지막 계정의 기기 캐시가 바로 열리고, **Drive 다시 연결** 한 번으로 계정 선택 없이 재연결합니다. 정적 호스팅의 한계와 보안 검토는 [로그인 유지](docs/AUTH.md)에 있습니다. 재실행 후에도 자동으로 로그인되는 서버 세션 방식은 별도 [Cloudflare Pages 시험 배포](docs/CLOUDFLARE.md)로 제공합니다(`npm run build:cloudflare`, 공식 주소는 GitHub Pages 유지). 기기의 IndexedDB에는 계정별 초안과 업로드 재시도 정보가 남습니다. 저장 충돌이 나면 덮어쓰지 않고 복사본으로 보존할 수 있습니다. 이전한 아이디어는 원래 ID와 `provenance`를 갖고 새 아이디어와 구분됩니다.
 
 아래 PostgreSQL 및 Storage 설명은 `NEXT_PUBLIC_STORAGE_BACKEND=legacy`로 선택하는 기존 모드에 해당합니다. 실제 데이터 검증 전까지 제거하지 않습니다.
 

@@ -1,6 +1,6 @@
 # Google 로그인 유지
 
-IdeaDock은 GitHub Pages 정적 사이트이며 Google Identity Services(GIS) **토큰 모델**로 Drive에 접근합니다. 토큰 모델은 팝업으로 최대 1시간짜리 액세스 토큰만 발급하고, 리프레시 토큰을 주지 않습니다. 따라서 정적 호스팅만으로는 "사용자 조작 없는 장기 로그인"을 만들 수 없습니다. 이 문서는 그 한계 안에서 선택한 방식과 보안 검토, 그리고 서버를 두는 대안을 정리합니다.
+IdeaDock은 GitHub Pages 정적 사이트이며 Google Identity Services(GIS) **토큰 모델**로 Drive에 접근합니다. 토큰 모델은 팝업으로 최대 1시간짜리 액세스 토큰만 발급하고, 리프레시 토큰을 주지 않습니다. 따라서 정적 호스팅만으로는 "사용자 조작 없는 장기 로그인"을 만들 수 없습니다. 이 문서는 그 한계 안에서 선택한 방식과 보안 검토, 그리고 장기 로그인을 위한 [서버 세션 로그인](#서버-세션-로그인-cloudflare-pages)(Cloudflare Pages 시험 배포)을 정리합니다.
 
 ## 동작
 
@@ -37,17 +37,65 @@ IdeaDock은 GitHub Pages 정적 사이트이며 Google Identity Services(GIS) **
 - Android 삼성 인터넷 설치형 PWA에서 GIS 팝업이 열리고 토큰을 앱 창으로 돌려주는지
 - PWA를 종료할 때 OS가 `sessionStorage`를 지우는 시점(백그라운드 전환만으로는 유지될 수 있음)
 
-## 장기 로그인이 꼭 필요할 때: 인증 서버 비교
+## 서버 세션 로그인 (Cloudflare Pages)
 
-재실행할 때마다 한 번 탭하는 것도 없애려면 **리프레시 토큰을 보관하는 서버**가 필요합니다(GIS 코드 모델 + 클라이언트 시크릿).
+GitHub Pages(위 토큰 모델)는 그대로 공식 운영 환경입니다. 재실행할 때마다 한 번 누르는 재연결도 없애기 위해 **Cloudflare Pages + Pages Functions + D1** 시험 배포를 추가했습니다. 설정·배포·이전 절차는 [Cloudflare 안내](CLOUDFLARE.md)에 있습니다. 같은 코드에서 `NEXT_PUBLIC_AUTH_MODE=server`로 빌드할 때만 이 방식이 켜집니다.
 
-| 항목                  | 현재(정적, 토큰 모델)      | Cloudflare Workers + 자체 도메인                                                                                                                                          | Supabase Edge Functions                              |
-| --------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| 재실행 시 사용자 조작 | 재연결 1탭(계정 선택 없음) | 없음(쿠키로 새 액세스 토큰 발급)                                                                                                                                          | 없음                                                 |
-| 비용                  | 0원                        | Workers 무료 등급(일 10만 요청) + 도메인 연 약 1.5~2만 원                                                                                                                 | 무료 등급(프로젝트 일시정지 정책 있음) + 도메인 필요 |
-| 필수 변경             | 없음                       | 앱과 API를 **같은 사이트**(예: `ideadock.example.com`, `api.ideadock.example.com`)로 이전. github.io와 다른 사이트면 서드파티 쿠키로 취급되어 삼성 인터넷·Safari에서 막힘 | 동일(쿠키 도메인 문제)                               |
-| 보안 부담             | 낮음                       | 클라이언트 시크릿·리프레시 토큰 암호화 보관, httpOnly·SameSite 쿠키, CSRF 방어, 토큰 폐기 처리                                                                            | 동일 + 서비스 롤 키 관리                             |
-| Google 설정           | 현재 그대로                | OAuth 앱을 **프로덕션** 상태로 전환해야 함(테스트 상태 리프레시 토큰은 7일 만료). 승인 원본·리디렉션 URI 추가                                                             | 동일                                                 |
-| 데이터 영향           | 없음                       | 원본이 바뀌므로 기기의 IndexedDB 캐시·초안을 새 주소로 옮겨야 함(Drive 데이터는 그대로)                                                                                   | 동일                                                 |
+### 왜 이 구조인가
 
-권장: 현재 방식으로 운영하면서 실기기에서 재연결 1탭이 불편하다고 확인되면, 전용 도메인 확보와 함께 Cloudflare Workers 방식으로 전환합니다. 전용 도메인은 Android Chrome의 같은 원본 PWA 설치 문제([PAGES.md](PAGES.md#pwa-설치))도 함께 해결합니다.
+- **같은 원본:** 앱(`/IdeaDock/`)과 API(`/api/auth/*`)가 `ideadock.pages.dev` 하나에서 제공됩니다. 세션 쿠키가 퍼스트파티이므로 삼성 인터넷·Safari의 서드파티 쿠키 차단과 무관합니다. `pages.dev`는 Public Suffix List에 있어 다른 `*.pages.dev` 사이트가 이 쿠키를 읽거나 설정할 수 없고, `oyueo-mm.github.io`의 다른 앱과도 저장소가 분리됩니다.
+- **D1:** 계정별 토큰과 세션만 저장합니다(무료 등급으로 충분). 아이디어·폴더·이미지는 지금처럼 사용자 Drive와 기기에만 있습니다.
+- **Drive 프록시 대신 단기 토큰 전달:** 서버가 갱신한 1시간짜리 액세스 토큰을 브라우저 **메모리**에 넘기고, 기존 Drive 클라이언트 코드(업로드·리비전·이미지 다운로드)를 그대로 씁니다. 모든 요청을 Functions로 중계하면 이미지·대량 리비전이 무료 요청 한도와 응답 크기 제한에 걸리고 지연이 늘지만, 보안상 이득은 작습니다. 토큰은 `drive.file` 범위뿐이고 XSS 노출은 기존 토큰 모델과 같은 수준입니다. Refresh Token은 서버 밖으로 나가지 않습니다.
+- **기존 OAuth 클라이언트 유지:** 같은 Client ID로 코드 흐름을 쓰므로 `drive.file`로 만든 기존 파일에 그대로 접근합니다.
+
+### 흐름
+
+1. **로그인** `GET /api/auth/login` → Google 인증 화면(전체 페이지 이동, 팝업 없음). `response_type=code`, `access_type=offline`, `include_granted_scopes=true`, PKCE(`S256`), `state`, `nonce`. 범위는 `openid email profile drive.file`. 재로그인에는 `login_hint`를, 계정 전환에는 `prompt=select_account`를 씁니다. `state`·PKCE 검증값·`nonce`·돌아갈 경로는 AES-GCM으로 봉인한 10분짜리 `__Host-` 쿠키에 둡니다.
+2. **콜백** `GET /api/auth/callback` → `state` 상수 시간 비교, 서버에서 Client Secret + `code_verifier`로 코드 교환, ID 토큰의 `iss`·`aud`·`exp`·`nonce`·`sub` 확인(토큰 엔드포인트에서 TLS로 직접 받은 값이므로 OIDC Core 3.1.3.7에 따라 서명 검증 생략), 동의한 범위에 `drive.file`이 있는지 확인. 돌아갈 경로는 `/IdeaDock/` 아래 같은 원본 경로만 허용합니다(오픈 리디렉트 방지).
+3. **Refresh Token 재발급 최소화:** `prompt=consent`를 기본으로 쓰지 않으므로 Google은 처음 동의할 때만 Refresh Token을 줍니다. 서버에 토큰이 없는데 Google이 주지 않은 경우에만 한 번 `prompt=consent`로 다시 요청합니다. 여러 기기·재로그인은 계정의 토큰 하나를 공유합니다(Google의 계정·클라이언트당 Refresh Token 개수 제한에 걸리지 않음).
+4. **세션** 새 로그인마다 32바이트 무작위 세션 ID를 발급하고(세션 고정 방지) 이 브라우저의 이전 세션은 지웁니다. 쿠키 `__Host-ideadock_session`: `HttpOnly; Secure; SameSite=Lax; Path=/`. D1에는 SHA-256 해시만 저장합니다.
+5. **앱 시작** 기기 캐시를 즉시 표시 → `POST /api/auth/token`으로 세션 복원(사용자 조작·팝업 없음) → 액세스 토큰을 메모리에 받아 백그라운드에서 Drive 동기화 → 미저장 초안 업로드. 캐시가 없는 첫 실행에서는 응답이 올 때까지 시작 화면을 띄우지 않아 로그인 화면이 깜빡이지 않습니다.
+6. **갱신** 토큰 만료 90초 전에 다시 요청하고, 서버는 남은 시간이 5분 이하이면 Refresh Token으로 갱신합니다. Drive가 401을 돌려주면 거부된 토큰을 알려 한 번 새로 받고 요청을 재시도합니다. 같은 계정의 여러 탭·기기가 동시에 요청하면 D1 임대(lease)로 한 곳만 Google에 갱신을 요청하고 나머지는 그 결과를 씁니다.
+
+### 저장 위치
+
+| 데이터                | 위치                                 | 보호                                                                       |
+| --------------------- | ------------------------------------ | -------------------------------------------------------------------------- |
+| Refresh Token         | D1 `accounts.refresh_token`          | AES-256-GCM, 키는 Cloudflare Secret `TOKEN_ENCRYPTION_KEY`, `sub`에 바인딩 |
+| 액세스 토큰 캐시      | D1 `accounts.access_token`           | 같은 방식으로 암호화                                                       |
+| 세션                  | 브라우저 HttpOnly 쿠키 / D1에는 해시 | JavaScript에서 읽을 수 없음                                                |
+| 액세스 토큰(브라우저) | 메모리만                             | localStorage·sessionStorage·IndexedDB에 쓰지 않음(E2E로 검사)              |
+| Client Secret         | Cloudflare Secret                    | 브라우저 번들·저장소에 없음                                                |
+
+### 방어
+
+- **CSRF:** 상태를 바꾸거나 토큰을 주는 요청은 `POST`만 받고, `Origin`이 `APP_ORIGIN`과 같고, `Sec-Fetch-Site`가 있으면 `same-origin`이며, `Content-Type: application/json`과 사용자 정의 헤더 `X-IdeaDock-Auth: 1`이 있어야 합니다. 다른 사이트의 폼 전송과 `fetch`는 403 또는 CORS 차단으로 끝납니다. `SameSite=Lax`가 추가 방어선입니다. 로그인 시작(`GET`)은 Google 화면을 열 뿐이고 로그인 CSRF는 `state`로 막습니다.
+- **캐시:** 모든 API 응답은 `Cache-Control: no-store`, `Referrer-Policy: no-referrer`.
+- **계정 격리:** 세션은 정확히 한 `sub`에 묶이고 토큰 응답은 그 계정 것만 줍니다. 클라이언트는 기존처럼 Drive 저장소를 계정별로 만들며, 다른 계정의 세션이 복원됐는데 이 기기에 이전 계정의 미저장 초안이 있으면 연결하지 않고 원래 계정으로 다시 로그인하라고 안내합니다.
+- **오류 처리:**
+
+  | 상황                                                                         | 서버                                             | 화면                                                   |
+  | ---------------------------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------ |
+  | Google 권한 취소, Refresh Token 만료·무효(`invalid_grant`), Testing 7일 만료 | 토큰 삭제, 그 계정 세션 모두 종료, 401 `revoked` | `Google 다시 로그인`, 초안 보존                        |
+  | 세션 60일 미사용·400일 경과·로그아웃                                         | 401 `session`                                    | `Google 다시 로그인`, 초안 보존                        |
+  | 오프라인, Google 장애(5xx·네트워크)                                          | 세션 유지, 503 `unavailable`                     | `Google 연결을 기다리는 중`, 60초마다·온라인 시 재시도 |
+  | Client Secret 오류                                                           | 503 `config`                                     | 같은 대기 안내(관리자 설정 확인 필요)                  |
+  | Drive 범위만 해제                                                            | 401 `scope`                                      | `Google 다시 로그인`                                   |
+
+  어떤 실패도 기기의 아이디어·이미지·초안이나 Drive 데이터를 지우지 않습니다.
+
+- **로그아웃:** 이 기기의 세션만 삭제합니다. 오프라인이라 서버에 닿지 못하면 기기에 "로그아웃 대기"를 남겨 다음 실행 때 먼저 처리하므로 다시 자동 로그인되지 않습니다. **모든 기기에서 로그아웃**은 Google에서 토큰을 폐기하고 그 계정의 모든 세션을 끝냅니다(이 경우 GitHub Pages 주소도 다음 연결 때 동의 화면이 다시 나올 수 있음). 데이터 보존 정책은 기존과 같습니다.
+
+### 장기 로그인 유지 조건과 한계
+
+자동 로그인은 다음이 모두 참일 때 유지됩니다. **영구 로그인을 보장하지 않습니다.**
+
+- 같은 브라우저(또는 PWA)에서 세션 쿠키가 지워지지 않았고, 마지막 사용 후 **60일 이내**이며, 처음 로그인 후 **400일 이내**(Chrome의 쿠키 최대 수명)
+- Google 권한이 살아 있음: 사용자가 권한을 취소하지 않았고, OAuth 앱이 **프로덕션** 상태이며(Testing은 7일), Refresh Token을 **6개월 이상 쓰지 않아** Google이 만료시키지 않았음
+- 서버의 `TOKEN_ENCRYPTION_KEY`·Client Secret이 바뀌지 않았음
+
+다음 경우는 다시 로그인해야 합니다: 브라우저 쿠키 삭제, 비밀(시크릿) 모드 창 종료, 다른 브라우저·기기(각각 첫 로그인 1회), 저장 공간 부족으로 OS가 PWA 데이터를 정리한 경우.
+
+### 검증 범위
+
+`npm test`(서버 단위 24개)와 `npm run test:e2e:server`(브라우저 8개 × 데스크톱·모바일)는 실제 핸들러를 node:sqlite와 모의 Google·Drive로 실행합니다. 시간 경과는 서버 시계를 앞당겨 모의합니다. 실제 Workers 런타임은 `wrangler pages dev`로 라우팅·D1·WebCrypto만 확인했습니다. 실제 Google 계정, 실제 시간 경과, 삼성 인터넷 PWA는 [Cloudflare 안내의 실기기 항목](CLOUDFLARE.md#실기기-확인-항목-실제-계정실제-시간)으로 확인합니다.

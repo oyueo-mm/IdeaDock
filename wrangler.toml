@@ -1,0 +1,18 @@
+# Cloudflare Pages trial deployment (https://<project>.pages.dev/IdeaDock/).
+# The official site stays on GitHub Pages; see docs/CLOUDFLARE.md.
+name = "ideadock"
+pages_build_output_dir = "dist-cloudflare"
+compatibility_date = "2026-09-01"
+
+[vars]
+# Exactly the public origin of this Pages project, without a path.
+APP_ORIGIN = "https://ideadock.pages.dev"
+# GOOGLE_CLIENT_ID: set as a plain variable in the Pages project settings.
+# GOOGLE_CLIENT_SECRET and TOKEN_ENCRYPTION_KEY: `wrangler pages secret put`.
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ideadock-auth"
+# Replace with the id printed by `wrangler d1 create ideadock-auth`.
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"

@@ -32,7 +32,15 @@ declare global {
     google?: GoogleIdentity;
   }
 }
-export const driveConfigured = !!process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+/**
+ * "token": Google Identity Services popup tokens (GitHub Pages, no server).
+ * "server": same-origin /api/auth sessions that refresh Drive access tokens on
+ * the server (Cloudflare Pages). See docs/AUTH.md.
+ */
+export const authMode: "token" | "server" =
+  process.env.NEXT_PUBLIC_AUTH_MODE === "server" ? "server" : "token";
+export const driveConfigured =
+  authMode === "server" || !!process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
 export const driveSpace =
   process.env.NEXT_PUBLIC_GOOGLE_DRIVE_SPACE === "appDataFolder"
     ? "appDataFolder"
@@ -50,13 +58,32 @@ type Session = { token: string; expires: number; user: GoogleUser };
 // - sessionKey (sessionStorage) keeps the short-lived access token so a reload
 //   in the same tab stays connected. It is per tab, never outlives Google's
 //   expires_in (<= 1 hour), and is dropped on sign-out, 401 or account mismatch.
+// - Server mode stores no token in the browser at all: the access token lives
+//   in memory and the HttpOnly session cookie brings it back after a restart.
 const accountKey = "ideadock:drive-account";
 const sessionKey = "ideadock:drive-session";
+const logoutKey = "ideadock:logout-pending";
 let session: Session | undefined;
 let restored = false;
 let loading: Promise<void> | undefined;
 let expiry: ReturnType<typeof setTimeout> | undefined;
 const listeners = new Set<() => void>();
+/**
+ * Server mode only. "restoring": asking the server; "ready": it answered with
+ * a token; "signed-out": the session is really gone (expired, revoked, logged
+ * out) and only a new Google sign-in helps; "unavailable": offline or Google
+ * is down, so the session is kept and retried.
+ */
+export type ServerAuthState =
+  "restoring" | "ready" | "signed-out" | "unavailable";
+let serverAuth: ServerAuthState = "restoring";
+const notify = () => listeners.forEach((listener) => listener());
+function setServerAuth(next: ServerAuthState) {
+  if (serverAuth === next) return;
+  serverAuth = next;
+  notify();
+}
+export const driveAuthState = () => serverAuth;
 export class DriveAuthError extends Error {
   constructor() {
     super(
@@ -107,6 +134,16 @@ function setSession(next: Session | undefined, quiet = false) {
   session = next;
   if (expiry) clearTimeout(expiry);
   expiry = undefined;
+  if (authMode === "server") {
+    // Renew shortly before expiry; the server refreshes with its stored grant.
+    if (next)
+      expiry = setTimeout(
+        () => void serverToken(),
+        Math.min(Math.max(next.expires - Date.now() - 90_000, 0), 2 ** 31 - 1),
+      );
+    if (!quiet) notify();
+    return;
+  }
   try {
     if (next)
       storage("sessionStorage")?.setItem(sessionKey, JSON.stringify(next));
@@ -122,7 +159,7 @@ function setSession(next: Session | undefined, quiet = false) {
   if (!quiet) listeners.forEach((listener) => listener());
 }
 function current() {
-  if (!restored && typeof window !== "undefined") {
+  if (!restored && authMode === "token" && typeof window !== "undefined") {
     restored = true;
     const saved = read("sessionStorage", sessionKey) as Session | null;
     if (
@@ -169,6 +206,17 @@ export function loadGoogle() {
 export async function connectDrive(
   options: { hint?: GoogleUser } = {},
 ): Promise<GoogleUser> {
+  if (authMode === "server") {
+    // Full-page sign-in on the same origin; drafts are already on the device.
+    const params = new URLSearchParams({
+      return: location.pathname + location.search + location.hash,
+    });
+    const hint = options.hint?.id.slice("google:".length);
+    if (hint) params.set("hint", hint);
+    else params.set("switch", "1");
+    location.assign(`/api/auth/login?${params}`);
+    return new Promise<GoogleUser>(() => {});
+  }
   if (!driveConfigured)
     throw new Error("Google OAuth 클라이언트 ID 설정이 필요합니다.");
   await loadGoogle();
@@ -213,6 +261,141 @@ export async function connectDrive(
 export function disconnectDrive() {
   restored = true;
   setSession(undefined);
+  if (authMode === "server") setServerAuth("signed-out");
+}
+type ServerReply =
+  { ok: true; user: GoogleUser } | { ok: false; reason: string };
+let renewing: Promise<ServerReply> | undefined;
+const authHeaders = {
+  "Content-Type": "application/json",
+  "X-IdeaDock-Auth": "1",
+};
+/**
+ * Asks the server session for a Drive access token. Concurrent callers share
+ * one request. `rejected` is a token Drive just refused, so it is replaced.
+ */
+export function serverToken(options: { rejected?: string } = {}) {
+  return (renewing ??= (async (): Promise<ServerReply> => {
+    try {
+      let response: Response;
+      try {
+        response = await fetch("/api/auth/token", {
+          method: "POST",
+          credentials: "same-origin",
+          cache: "no-store",
+          headers: authHeaders,
+          body: JSON.stringify({ rejected: options.rejected }),
+        });
+      } catch {
+        setServerAuth("unavailable");
+        return { ok: false, reason: "offline" };
+      }
+      const body = (await response.json().catch(() => ({}))) as {
+        access_token?: unknown;
+        expires_in?: unknown;
+        reason?: unknown;
+        user?: { id?: unknown; email?: unknown; name?: unknown };
+      };
+      const user = {
+        id: String(body.user?.id ?? ""),
+        email: String(body.user?.email ?? ""),
+        user_metadata: { full_name: String(body.user?.name ?? "") },
+      };
+      if (
+        response.ok &&
+        typeof body.access_token === "string" &&
+        isUser(user)
+      ) {
+        const seconds = Math.min(Number(body.expires_in) || 0, 3600);
+        setSession({
+          token: body.access_token,
+          expires: Date.now() + seconds * 1000 - 30000,
+          user,
+        });
+        setServerAuth("ready");
+        return { ok: true, user };
+      }
+      const reason =
+        typeof body.reason === "string"
+          ? body.reason
+          : `http-${response.status}`;
+      if (response.status === 401) {
+        setSession(undefined);
+        setServerAuth("signed-out");
+      } else setServerAuth("unavailable");
+      return { ok: false, reason };
+    } finally {
+      renewing = undefined;
+    }
+  })());
+}
+async function serverLogout(everywhere: boolean) {
+  const response = await fetch("/api/auth/logout", {
+    method: "POST",
+    credentials: "same-origin",
+    cache: "no-store",
+    headers: authHeaders,
+    body: JSON.stringify({ everywhere }),
+  });
+  if (!response.ok) throw new Error(`logout ${response.status}`);
+}
+/**
+ * App start in server mode. A sign-out that could not reach the server earlier
+ * is finished first, so an old session never signs the device back in.
+ */
+export async function restoreServerSession(): Promise<ServerReply> {
+  if (read("localStorage", logoutKey)) {
+    try {
+      await serverLogout(false);
+      storage("localStorage")?.removeItem(logoutKey);
+    } catch {
+      // Still pending; stay signed out on this device until it goes through.
+    }
+    setServerAuth("signed-out");
+    return { ok: false, reason: "logout" };
+  }
+  return serverToken();
+}
+/** Ends the server session (or every session of the account) on sign-out. */
+export async function signOutServer(everywhere = false) {
+  if (authMode !== "server") return;
+  try {
+    await serverLogout(everywhere);
+  } catch {
+    if (everywhere)
+      throw new Error("모든 기기 로그아웃은 인터넷 연결이 필요합니다.");
+    try {
+      storage("localStorage")?.setItem(logoutKey, "true");
+    } catch {
+      // Without storage the session cookie expires on its own.
+    }
+  }
+  setServerAuth("signed-out");
+}
+const authResults: Record<string, string> = {
+  denied: "Google 로그인이 취소되었습니다.",
+  scope: "Drive 저장 권한에 동의해야 연결할 수 있습니다.",
+  state: "로그인 요청이 만료되었거나 올바르지 않습니다. 다시 로그인해 주세요.",
+  offline:
+    "Google이 자동 로그인 권한을 발급하지 않았습니다. 다시 로그인해 주세요.",
+  unavailable:
+    "Google 로그인 서버에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.",
+  error: "Google 로그인에 실패했습니다. 다시 시도해 주세요.",
+};
+/** Reads and removes the `?auth=` result the sign-in redirect left behind. */
+export function takeAuthResult() {
+  if (authMode !== "server" || typeof window === "undefined") return null;
+  const params = new URLSearchParams(location.search);
+  const result = params.get("auth");
+  if (!result) return null;
+  params.delete("auth");
+  const search = params.toString();
+  history.replaceState(
+    history.state,
+    "",
+    location.pathname + (search ? `?${search}` : "") + location.hash,
+  );
+  return authResults[result] ?? authResults.error;
 }
 /** Sign-out: forget the token and the remembered workspace on this device. */
 export function forgetDriveUser() {
@@ -244,7 +427,12 @@ export class GoogleDrive implements ImmutableRemote {
   readonly storageNamespace = driveSpace;
   private folderPromise?: Promise<string>;
   constructor(readonly account: string) {}
-  private async request(path: string, init: RequestInit = {}, upload = false) {
+  private async request(
+    path: string,
+    init: RequestInit = {},
+    upload = false,
+    renewed = false,
+  ): Promise<Response> {
     const active = current();
     if (!active || active.user.id !== this.account) throw new DriveAuthError();
     const url = `https://www.googleapis.com/${upload ? "upload/" : ""}drive/v3/${path}`;
@@ -266,8 +454,16 @@ export class GoogleDrive implements ImmutableRemote {
       response = await send();
     }
     if (response.status === 401) {
+      // Server mode: fetch a fresh token once and repeat the request.
+      if (authMode === "server" && !renewed) {
+        const reply = await serverToken({ rejected: active.token });
+        if (reply.ok && reply.user.id === this.account)
+          return this.request(path, init, upload, true);
+      }
       // Revoked or expired early: forget the token, keep the local drafts.
       if (session === active) setSession(undefined);
+      // Drive refused even a freshly issued token: only a new sign-in helps.
+      if (authMode === "server" && renewed) setServerAuth("signed-out");
       throw new DriveAuthError();
     }
     if (!response.ok) {

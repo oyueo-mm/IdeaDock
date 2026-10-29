@@ -32,6 +32,13 @@ vi.mock("../src/lib/local-db", () => ({
   },
 }));
 vi.mock("../src/lib/drive", () => ({
+  // Token (GitHub Pages) mode; server mode is covered by auth-server tests.
+  authMode: "token",
+  driveAuthState: () => "restoring",
+  restoreServerSession: vi.fn(),
+  serverToken: vi.fn(),
+  signOutServer: async () => {},
+  takeAuthResult: () => null,
   driveConfigured: false,
   driveCacheKey: (account: string) => `${account}:cache`,
   loadGoogle: vi.fn(),
