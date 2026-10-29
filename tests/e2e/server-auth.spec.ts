@@ -95,6 +95,10 @@ async function rename(page: Page, from: string, to: string) {
   await title.blur();
 }
 async function openSettings(page: Page) {
+  // After a sign-in redirect the app must finish loading before the nav opens.
+  await expect(
+    page.getByRole("region", { name: "폴더와 아이디어 목록" }),
+  ).toBeVisible();
   await openNav(page);
   await page
     .getByRole("button", { name: "작업 공간 설정", exact: true })
