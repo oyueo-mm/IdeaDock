@@ -11,6 +11,8 @@ export default defineConfig({
   testDir: "./tests/e2e",
   testMatch: /server-auth\.spec\.ts$/,
   workers: 1,
+  // On CI, failures also appear as check annotations next to the run.
+  reporter: process.env.CI ? [["github"], ["line"]] : "list",
   use: { baseURL, trace: "retain-on-failure" },
   webServer: {
     command: `node scripts/build-cloudflare.mjs && node scripts/serve-cloudflare-mock.mjs --port ${port}`,
