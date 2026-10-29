@@ -54,6 +54,29 @@ export class RevisionLoader<R> {
     await this.options.db.set(this.options.cacheKey(hash), revision);
     this.verified.set(hash, revision);
   }
+  /**
+   * Re-reads exactly these revisions from the remote and checks each against
+   * its hash: a server-side verification of data this device just wrote that
+   * does not download every other revision. Throws if one is missing.
+   */
+  async verifyRemote(hashes: string[]): Promise<Map<string, R>> {
+    const files = new Map<string, RemoteFile>();
+    for (const file of await this.options.remote.list(this.options.kind))
+      if (!files.has(file.appProperties.key))
+        files.set(file.appProperties.key, file);
+    const verified = new Map<string, R>();
+    await mapLimit([...new Set(hashes)], READ_CONCURRENCY, async (hash) => {
+      const file = files.get(hash);
+      if (!file)
+        throw new Error(
+          `서버에서 저장한 문서를 찾지 못했습니다: ${hash.slice(0, 12)}`,
+        );
+      const blob = await this.options.remote.read(file.id);
+      if ((await digest(blob)) !== hash) throw new Error(this.options.corrupt);
+      verified.set(hash, this.options.check(JSON.parse(await blob.text())));
+    });
+    return verified;
+  }
   load(force = false): Promise<Loaded<R>[]> {
     if (force) return this.run(true);
     const writes = this.options.writes();

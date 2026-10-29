@@ -4,6 +4,8 @@ import { FolderRepository } from "./folder-repository";
 import { canonical, digest, imageNodes, validateIdeas } from "./integrity";
 import { KeyValueStore, localDb } from "./local-db";
 import { DriveRepository } from "./drive";
+import { StageTimer, type StageTiming } from "./stage-timer";
+import { alreadyApplied, applyChanges, type IdeaUpdate } from "./import-match";
 
 export type ImportSource = {
   id: string;
@@ -25,7 +27,25 @@ export type MigrationProgress = {
   verified: string[];
   state: "uploading" | "failed" | "verified";
   error?: string;
+  /** Ideas to store in this run, for "n/total" progress. */
+  total?: number;
+  /** What is happening now, in words for the user. */
+  stage?: string;
+  /** Finished stages with their time and Drive request counts. */
+  stages?: StageTiming[];
 };
+/** "3/27개 저장 완료 · 아이디어 저장 중" while running, a summary when done. */
+export function describeProgress(p: MigrationProgress) {
+  const count =
+    p.total === undefined
+      ? `${p.verified.length}개`
+      : `${p.verified.length}/${p.total}개`;
+  if (p.state === "verified")
+    return "이전 및 서버 재조회 검증 완료. 원본과 복구 백업은 보존되었습니다. 다른 기기에서도 확인해 주세요.";
+  if (p.state === "failed")
+    return `${count} 저장 완료 · 실패 지점부터 재시도할 수 있습니다.`;
+  return `${count} 저장 완료 · ${p.stage ?? "준비 중"}`;
+}
 export interface ImportAdapter {
   readonly id: string;
   accepts(file: File): boolean;
@@ -279,12 +299,20 @@ export async function restoreDemoBackup(
   );
   return imported;
 }
+/** What to do with the ideas of a backup; without a plan every idea is created. */
+export type ImportPlan = {
+  /** Ids (as in the backup) of the ideas to create. The others are only preserved. */
+  create?: string[];
+  /** Existing ideas whose completion state and GitHub links are updated. */
+  updates?: IdeaUpdate[];
+};
 export async function migrate(
   backup: MigrationBackup,
   repo: DriveRepository,
   approved: { account: string; backup: string },
   decode: (data: string) => Promise<Blob>,
   onProgress: (progress: MigrationProgress) => void = () => {},
+  plan?: ImportPlan,
 ) {
   if (approved.account !== repo.account || approved.backup !== backup.id)
     throw new Error("이 계정과 백업에 대한 사용자 승인이 필요합니다.");
@@ -293,114 +321,223 @@ export async function migrate(
   if (canonical(await repo.db.get(`backup:${backup.id}`)) !== canonical(backup))
     throw new Error("이전 전 복구 백업을 확인하지 못했습니다.");
   const stateKey = `${repo.account}:migration:${backup.id}`;
+  // A resumed run keeps the choices made in the preview.
+  const planKey = `${repo.account}:migration-plan:${backup.id}`;
+  if (plan) await repo.db.set(planKey, plan);
+  else plan = await repo.db.get<ImportPlan>(planKey);
+  // Only the ideas the user chose to create are written.
+  const chosen = plan?.create ? new Set(plan.create) : null;
+  const originals: { source: ImportSource; original: Idea }[] = [];
+  for (const source of backup.sources)
+    for (const original of source.ideas)
+      if (
+        (!chosen || chosen.has(original.id)) &&
+        !originals.some((o) => o.original.id === original.id)
+      )
+        originals.push({ source, original });
   const progress: MigrationProgress = {
     account: repo.account,
     backup: backup.id,
     verified: [],
     state: "uploading",
+    total: originals.length + (plan?.updates?.length ?? 0),
   };
+  const timer = new StageTimer(() => repo.remote.stats?.());
   const checkpoint = async () => {
+    progress.stages = [...timer.stages];
     await repo.db.set(stateKey, progress);
     onProgress(structuredClone(progress));
   };
   await checkpoint();
+  const stage = async <T>(name: string, run: () => Promise<T>) => {
+    progress.stage = name;
+    await checkpoint();
+    return timer.run(name, run);
+  };
   try {
     // A cloud copy of the self-contained recovery backup precedes idea writes.
-    await repo.put(
-      "backup",
-      new Blob([canonical(backup)], { type: "application/json" }),
+    await stage("복구 백업을 Drive에 저장", () =>
+      // The batch path also retries rate limits and dropped connections.
+      repo.putMany("backup", [
+        new Blob([canonical(backup)], { type: "application/json" }),
+      ]),
     );
-    const imageMap = new Map<string, string>();
     const folderRepo = new FolderRepository(repo);
     const importedFolders = backup.sources.flatMap((s) =>
       (s.folders ?? []).map((f) => ({ ...f, user_id: repo.account })),
     );
-    if (importedFolders.length) {
+    const folderHashes: { folder: Folder; hash: string }[] = [];
+    await stage("폴더 저장", async () => {
+      if (!importedFolders.length) return;
       const unique = [
         ...new Map(importedFolders.map((f) => [f.id, f])).values(),
       ];
       validateFolders(unique);
       const history = await folderRepo.revisions();
-      // append complete immutable records; validation above checks the whole snapshot.
+      const todo: Folder[] = [];
       for (const f of unique) {
         const old = history.filter((r) => r.revision.folder.id === f.id);
-        if (
-          old.length &&
-          !old.some((r) => canonical(r.revision.folder) === canonical(f))
-        )
+        const same = old.find(
+          (r) => canonical(r.revision.folder) === canonical(f),
+        );
+        if (old.length && !same)
           throw new Error("기존 Drive 폴더와 ID가 겹칩니다.");
-        if (!old.length) await folderRepo.append(f, null);
+        if (same) folderHashes.push({ folder: f, hash: same.hash });
+        else todo.push(f);
       }
-      const actual = await folderRepo.revisions(true);
-      for (const f of unique)
-        if (!actual.some((r) => canonical(r.revision.folder) === canonical(f)))
-          throw new Error("폴더 이전 검증 실패");
-    }
-    for (const image of backup.images) {
-      const { hash } = await repo.put("image", await decode(image.data));
-      if (hash !== image.sha256)
-        throw new Error("업로드된 이미지가 원본과 다릅니다.");
-      imageMap.set(image.path, `drive-sha:${hash}`);
-    }
-    const expected: { idea: Idea; fingerprint: string }[] = [];
-    for (const source of backup.sources)
-      for (const original of source.ideas) {
-        const fingerprint = await digest(canonical(original));
-        const idea = structuredClone(original);
-        idea.user_id = repo.account;
-        idea.provenance = original.provenance ?? {
-          source: source.id,
-          source_id: original.id,
-          original_owner: original.user_id,
-          fingerprint,
-        };
-        for (const image of idea.images)
-          image.storage_path = imageMap.get(image.storage_path)!;
-        for (const node of imageNodes(idea.content)) {
-          const attrs = node.attrs as Record<string, unknown>;
-          attrs.storage_path = imageMap.get(String(attrs.storage_path))!;
-        }
-        // A restored modern backup keeps its original provenance and timestamps.
-        if (!expected.some((e) => e.idea.id === idea.id))
-          expected.push({ idea, fingerprint });
-      }
-    const history = await repo.revisions();
-    for (const { idea } of expected) {
-      const existing = history.filter((r) => r.revision.idea.id === idea.id);
-      const identical = existing.find(
-        (r) => canonical(r.revision.idea) === canonical(idea),
+      // Checked against the server in the final stage.
+      const hashes = todo.length
+        ? await folderRepo.appendMany(todo, { readBack: false })
+        : [];
+      todo.forEach((folder, i) =>
+        folderHashes.push({ folder, hash: hashes[i] }),
       );
-      if (!identical) {
-        if (existing.length)
+    });
+
+    const needed = new Set(
+      originals.flatMap(({ original }) =>
+        original.images.map((i) => i.storage_path),
+      ),
+    );
+    const imageMap = new Map<string, string>();
+    const wantedImages = backup.images.filter((i) => needed.has(i.path));
+    await stage("이미지 저장", async () => {
+      const hashes = await repo.putMany(
+        "image",
+        await Promise.all(wantedImages.map((i) => decode(i.data))),
+        { readBack: false }, // verified from the server in the final stage
+      );
+      wantedImages.forEach((image, i) => {
+        if (hashes[i] !== image.sha256)
+          throw new Error("업로드된 이미지가 원본과 다릅니다.");
+        imageMap.set(image.path, `drive-sha:${hashes[i]}`);
+      });
+    });
+    const expected: { idea: Idea; hash?: string }[] = [];
+    for (const { source, original } of originals) {
+      const fingerprint = await digest(canonical(original));
+      const idea = structuredClone(original);
+      idea.user_id = repo.account;
+      idea.provenance = original.provenance ?? {
+        source: source.id,
+        source_id: original.id,
+        original_owner: original.user_id,
+        fingerprint,
+      };
+      for (const image of idea.images)
+        image.storage_path = imageMap.get(image.storage_path)!;
+      for (const node of imageNodes(idea.content)) {
+        const attrs = node.attrs as Record<string, unknown>;
+        attrs.storage_path = imageMap.get(String(attrs.storage_path))!;
+      }
+      // A restored modern backup keeps its original provenance and timestamps.
+      expected.push({ idea });
+    }
+    const updates = plan?.updates ?? [];
+    const written: { idea: Idea; hash: string }[] = [];
+    await stage("아이디어 저장", async () => {
+      const history = await repo.revisions();
+      const todo: typeof expected = [];
+      for (const item of expected) {
+        const existing = history.filter(
+          (r) => r.revision.idea.id === item.idea.id,
+        );
+        const identical = existing.find(
+          (r) => canonical(r.revision.idea) === canonical(item.idea),
+        );
+        if (identical) {
+          // Stored by an earlier run, possibly edited since: nothing to write.
+          written.push({ idea: item.idea, hash: identical.hash });
+          progress.verified.push(item.idea.id);
+        } else if (existing.length)
           throw new Error(
-            `기존 Drive 아이디어와 ID가 겹치거나 원본이 변경되었습니다: ${idea.title}. 기존 데이터는 보존했습니다.`,
+            `기존 Drive 아이디어와 ID가 겹치거나 원본이 변경되었습니다: ${item.idea.title}. 기존 데이터는 보존했습니다.`,
           );
-        const hash = await repo.append(idea, null);
-        history.push({ revision: { schema: 1, idea, parent: null }, hash });
+        else todo.push(item);
       }
-      progress.verified.push(idea.id);
       await checkpoint();
-    }
-    // Full server reread; checkpoints alone never imply successful verification.
-    const actual = await repo.revisions(true);
-    for (const { idea } of expected) {
-      if (!actual.some((r) => canonical(r.revision.idea) === canonical(idea)))
-        throw new Error(`이전 결과 불일치: ${idea.id}`);
-    }
-    const remoteImages = await repo.remote.list("image");
-    for (const image of backup.images) {
-      const file = remoteImages.find(
-        (f) => f.appProperties.key === image.sha256,
+      const hashes = await repo.appendMany(
+        todo.map(({ idea }) => ({ idea, parent: null })),
+        {
+          readBack: false, // verified from the server in the final stage
+          onDone: async (i) => {
+            progress.verified.push(todo[i].idea.id);
+            await checkpoint();
+          },
+        },
       );
-      if (
-        !file ||
-        (await digest(await repo.remote.read(file.id))) !== image.sha256
-      )
-        throw new Error("이전 후 이미지 검증 실패");
-    }
-    if (progress.verified.length !== expected.length)
+      todo.forEach((item, i) =>
+        written.push({ idea: item.idea, hash: hashes[i] }),
+      );
+    });
+
+    const updated: { idea: Idea; hash: string }[] = [];
+    if (updates.length)
+      await stage("기존 아이디어 갱신", async () => {
+        const rows = await repo.list();
+        const todo: { idea: Idea; parent: string; id: string }[] = [];
+        for (const update of updates) {
+          const row = rows.find((r) => r.idea.id === update.id);
+          if (!row)
+            throw new Error(
+              "갱신할 기존 아이디어를 Drive에서 찾지 못했습니다.",
+            );
+          if (alreadyApplied(row.idea, update.changes)) {
+            // Applied by an earlier run, or already true: leave it untouched.
+            updated.push({ idea: row.idea, hash: row.head });
+            progress.verified.push(update.id);
+            continue;
+          }
+          if (row.idea.version !== update.version || row.conflicts.length)
+            throw new Error(
+              `미리보기 이후 '${row.idea.title}'이(가) 바뀌었습니다. 다시 검토해 주세요. 기존 데이터는 변경하지 않았습니다.`,
+            );
+          todo.push({
+            idea: applyChanges(row.idea, update.changes),
+            parent: row.head,
+            id: update.id,
+          });
+        }
+        await checkpoint();
+        const saved = await repo.saveMany(
+          todo.map(({ idea, parent }) => ({ idea, parent })),
+          {
+            readBack: false, // verified from the server in the final stage
+            onDone: async (i) => {
+              progress.verified.push(todo[i].id);
+              await checkpoint();
+            },
+          },
+        );
+        for (const s of saved) updated.push({ idea: s.idea, hash: s.head });
+      });
+
+    // Server reread of what this run wrote, never of unrelated revisions:
+    // checkpoints alone never imply successful verification.
+    await stage("서버 재조회 검증", async () => {
+      const revisions = await repo.verifyRevisions(
+        [...written, ...updated].map((w) => w.hash),
+      );
+      for (const w of written)
+        if (canonical(revisions.get(w.hash)?.idea) !== canonical(w.idea))
+          throw new Error(`이전 결과 불일치: ${w.idea.id}`);
+      for (const w of updated)
+        if (canonical(revisions.get(w.hash)?.idea) !== canonical(w.idea))
+          throw new Error(`갱신 결과 불일치: ${w.idea.id}`);
+      if (folderHashes.length) {
+        const folders = await folderRepo.verifyRevisions(
+          folderHashes.map((f) => f.hash),
+        );
+        for (const f of folderHashes)
+          if (canonical(folders.get(f.hash)?.folder) !== canonical(f.folder))
+            throw new Error("폴더 이전 검증 실패");
+      }
+      await repo.verifyImages(wantedImages.map((i) => i.sha256));
+    });
+    if (progress.verified.length !== (progress.total ?? 0))
       throw new Error("아이디어 개수 불일치");
     progress.state = "verified";
+    progress.stage = undefined;
     await checkpoint();
     return progress;
   } catch (error) {

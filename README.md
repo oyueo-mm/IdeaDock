@@ -98,7 +98,7 @@ npm.cmd run test:security
 
 GitHub Actions가 타입 검사, 단위/DB 테스트, 빌드와 데스크톱·모바일 Chromium E2E를 수행합니다. 실제 Google OAuth 및 Supabase Storage 통합 테스트는 외부 프로젝트가 필요하므로 별도입니다. 자동 접근성 검사는 수동 키보드/스크린 리더 검증이나 WCAG 인증을 대신하지 않습니다.
 
-로딩 성능 측정과 개선 내용은 [성능 기록](docs/PERFORMANCE.md)에 있습니다. 실행 결과와 확인하지 못한 항목은 [검증 기록](docs/VALIDATION.md)과 [이전 안내](docs/MIGRATION.md)를 참고하세요. 모의 API 검증은 실제 Google OAuth·Drive 또는 실제 두 기기 검증을 의미하지 않습니다.
+로딩 성능 측정과 개선 내용은 [성능 기록](docs/PERFORMANCE.md)에 있습니다. 가져오기 성능, 중복 검토와 완료·GitHub 링크 갱신은 [가져오기 성능](docs/IMPORT_PERFORMANCE.md)에 있습니다. 실행 결과와 확인하지 못한 항목은 [검증 기록](docs/VALIDATION.md)과 [이전 안내](docs/MIGRATION.md)를 참고하세요. 모의 API 검증은 실제 Google OAuth·Drive 또는 실제 두 기기 검증을 의미하지 않습니다.
 
 ## 남은 작업
 

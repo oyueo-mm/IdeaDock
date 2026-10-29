@@ -1,4 +1,4 @@
-import { expect, type BrowserContext } from "@playwright/test";
+import { expect, type BrowserContext, type Route } from "@playwright/test";
 import { createHash } from "node:crypto";
 type Stored = {
   id: string;
@@ -14,6 +14,16 @@ export type DriveStats = {
   upload: number;
   other: number;
   mediaKeys: string[];
+  /** generateIds calls, and how many ids they asked for in total. */
+  ids: number;
+  idsRequested: number;
+  /** Resumable upload sessions started and contents sent. */
+  start: number;
+  put: number;
+  /** Requests refused with 429 by the simulated write limit. */
+  limited: number;
+  /** Most upload requests in flight at the same time. */
+  peakWrites: number;
 };
 const emptyStats = (): DriveStats => ({
   list: 0,
@@ -21,6 +31,12 @@ const emptyStats = (): DriveStats => ({
   upload: 0,
   other: 0,
   mediaKeys: [],
+  ids: 0,
+  idsRequested: 0,
+  start: 0,
+  put: 0,
+  limited: 0,
+  peakWrites: 0,
 });
 /**
  * pageSize 1 (default) exercises multi-page listing; benchmarks pass Drive's
@@ -33,6 +49,12 @@ export function mockDrive(
   let stats = emptyStats();
   const failMedia = new Map<string, number>();
   let slow = 0;
+  let inflightWrites = 0,
+    writeLimit = Infinity,
+    putFailures = 0,
+    putLosses = 0,
+    stored = 0,
+    breakAfter: number | null = null;
   const files = new Map<string, Stored>();
   const uploads = new Map<string, Omit<Stored, "bytes">>();
   let allocation = 0,
@@ -47,6 +69,22 @@ export function mockDrive(
       const taken = stats;
       stats = emptyStats();
       return taken;
+    },
+    /** Uploads beyond this many at once are refused with 429, as Drive may. */
+    limitWrites: (concurrent: number) => {
+      writeLimit = concurrent;
+    },
+    /** After this many content uploads are stored, every upload fails (null: off). */
+    breakAfter: (stored: number | null) => {
+      breakAfter = stored;
+    },
+    /** The next `times` content uploads answer 503 without being stored. */
+    failPut: (times: number) => {
+      putFailures = times;
+    },
+    /** The next `times` content uploads are stored, but their reply is lost. */
+    losePut: (times: number) => {
+      putLosses = times;
     },
     /** The next `times` downloads of each key answer 503, then succeed. */
     failMedia: (keys: string[], times = 1) => {
@@ -79,7 +117,7 @@ export function mockDrive(
             json: { sub: "alice", email: "alice@example.com", name: "Alice" },
           }),
       );
-      await context.route("https://www.googleapis.com/**", async (route) => {
+      const handle = async (route: Route) => {
         const request = route.request(),
           url = new URL(request.url());
         if (request.method() === "OPTIONS")
@@ -108,8 +146,11 @@ export function mockDrive(
             failMedia.set(key, left - 1);
             return route.fulfill({ headers, status: 503 });
           }
-        } else if (url.pathname.startsWith("/upload/")) stats.upload++;
-        else if (
+        } else if (url.pathname.startsWith("/upload/")) {
+          stats.upload++;
+          if (request.method() === "POST") stats.start++;
+          else stats.put++;
+        } else if (
           url.pathname === "/drive/v3/files" &&
           request.method() === "GET"
         )
@@ -117,11 +158,30 @@ export function mockDrive(
         else stats.other++;
         if (url.pathname.endsWith("generateIds")) {
           expect(url.searchParams.get("space")).toBe("drive");
+          const count = Number(url.searchParams.get("count") || 1);
+          stats.ids++;
+          stats.idsRequested += count;
+          if (!(count >= 1 && count <= 1000))
+            return route.fulfill({ headers, status: 400 });
           return route.fulfill({
             headers,
-            json: { ids: [`file-${++allocation}`] },
+            json: {
+              ids: Array.from({ length: count }, () => `file-${++allocation}`),
+            },
           });
         }
+        if (
+          url.pathname.startsWith("/upload/") &&
+          inflightWrites > writeLimit
+        ) {
+          stats.limited++;
+          return route.fulfill({
+            headers,
+            status: 429,
+            json: { error: { errors: [{ reason: "rateLimitExceeded" }] } },
+          });
+        }
+
         if (url.pathname === "/drive/v3/files" && request.method() === "POST") {
           const folder = request.postDataJSON() as Omit<Stored, "bytes">;
           expect(folder.mimeType).toBe("application/vnd.google-apps.folder");
@@ -157,6 +217,12 @@ export function mockDrive(
         if (url.pathname.startsWith("/upload/") && request.method() === "PUT") {
           const id = url.searchParams.get("upload_id")!,
             metadata = uploads.get(id)!;
+          if (putFailures > 0) {
+            putFailures--;
+            return route.fulfill({ headers, status: 503 });
+          }
+          if (breakAfter !== null && stored >= breakAfter)
+            return route.fulfill({ headers, status: 503 });
           const bytes = request.postDataBuffer()!;
           expect(
             metadata.parents?.every(
@@ -167,6 +233,11 @@ export function mockDrive(
             metadata.appProperties.key,
           );
           files.set(id, { ...metadata, bytes });
+          stored++;
+          if (putLosses > 0) {
+            putLosses--;
+            return route.abort("failed");
+          }
           if (
             metadata.appProperties.kind === "revision" &&
             ++revisions === 2 &&
@@ -210,6 +281,21 @@ export function mockDrive(
               : {}),
           },
         });
+      };
+      await context.route("https://www.googleapis.com/**", async (route) => {
+        const upload = route
+          .request()
+          .url()
+          .startsWith("https://www.googleapis.com/upload/");
+        if (upload) {
+          inflightWrites++;
+          stats.peakWrites = Math.max(stats.peakWrites, inflightWrites);
+        }
+        try {
+          return await handle(route);
+        } finally {
+          if (upload) inflightWrites--;
+        }
       });
     },
   };

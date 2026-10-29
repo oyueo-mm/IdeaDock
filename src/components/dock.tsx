@@ -484,6 +484,7 @@ export default function Dock() {
           <MigrationPanel
             account={store.backend === "drive" ? store.user?.id : undefined}
             demo={store.demo}
+            existing={ideas}
             pending={
               store.pendingCount + (!store.demo ? folderStore.pendingCount : 0)
             }

@@ -94,7 +94,7 @@ test("folder changes persist across two sessions after an upload failure", async
     await other.close();
   }
 });
-test("Word import recovers a lost upload reply, rechecks images and skips the same file", async ({
+test("Word import recovers a lost upload reply by itself, rechecks images and skips the same file", async ({
   page,
   context,
 }) => {
@@ -135,21 +135,16 @@ test("Word import recovers a lost upload reply, rechecks images and skips the sa
       exact: true,
     })
     .click();
+  // The lost reply is looked up by hash and retried by the import itself.
+  await expect(
+    page.getByText(/Drive 문서·이미지 재조회 검증 완료/),
+  ).toBeVisible({ timeout: 20_000 });
   await expect(
     page.getByRole("button", {
       name: "실패 지점부터 Word 가져오기 재시도 승인",
       exact: true,
     }),
-  ).toBeEnabled();
-  await page
-    .getByRole("button", {
-      name: "실패 지점부터 Word 가져오기 재시도 승인",
-      exact: true,
-    })
-    .click();
-  await expect(
-    page.getByText(/Drive 문서·이미지 재조회 검증 완료/),
-  ).toBeVisible();
+  ).toHaveCount(0);
   expect(
     [...api.files.values()].filter((f) => f.appProperties.kind === "revision"),
   ).toHaveLength(3);

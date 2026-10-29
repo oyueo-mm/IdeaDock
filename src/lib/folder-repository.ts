@@ -125,6 +125,29 @@ export class FolderRepository {
     await this.loader.remember(hash, revision);
     return hash;
   }
+  /** Appends complete folder records in one batch; see DriveRepository.putMany. */
+  async appendMany(folders: Folder[], options: { readBack?: boolean } = {}) {
+    const revisions = folders.map((folder): FolderRevision => {
+      if (folder.user_id !== this.ideas.account)
+        throw new Error("폴더 계정 불일치");
+      validateFolders([{ ...folder, parent_id: null }]);
+      return { schema: 1, parent: null, folder };
+    });
+    const blobs = revisions.map(
+      (r) => new Blob([canonical(r)], { type: "application/json" }),
+    );
+    const hashes = await Promise.all(blobs.map((blob) => digest(blob)));
+    await this.ideas.putMany("folder-revision", blobs, {
+      readBack: options.readBack,
+      onDone: async (hash) =>
+        this.loader.remember(hash, revisions[hashes.indexOf(hash)]),
+    });
+    return hashes;
+  }
+  /** Re-reads exactly these folder revisions from Drive and checks their hashes. */
+  async verifyRevisions(hashes: string[]) {
+    return this.loader.verifyRemote(hashes);
+  }
   async save(folder: Folder, parent: string | null) {
     const rows = await this.list();
     const current = rows.find((r) => r.folder.id === folder.id);

@@ -190,7 +190,9 @@ test("approval, image backup, repeated migration and second-device reload", asyn
     await expect(
       second.getByRole("article").filter({ hasText: "휴지통 아이디어" }),
     ).toHaveCount(1);
-    await expect(second.getByText("이전한 아이디어").first()).toBeVisible();
+    // Provenance stays in the data (checked in the revision above); the list
+    // no longer labels it.
+    await expect(second.getByText("이전한 아이디어")).toHaveCount(0);
     expect(
       await second.evaluate(() => localStorage.getItem("ideadock:data:demo")),
     ).toBeNull();
@@ -258,7 +260,7 @@ test("Drive save failures, retry and concurrent-edit warnings remain visible whi
     [...api.files.values()].filter((f) => f.appProperties.kind === "revision"),
   ).toHaveLength(2);
 });
-test("deferral preserves the original demo and lost upload replies can be retried", async ({
+test("deferral preserves the original demo and a lost upload reply is recovered without duplicates", async ({
   page,
   context,
 }) => {
@@ -282,13 +284,13 @@ test("deferral preserves the original demo and lost upload replies can be retrie
     .getByRole("button", { name: "기존 데이터 찾기", exact: true })
     .click();
   await approve(page);
+  // The lost reply is looked up by hash and retried by the import itself.
+  await expect(page.getByText(/이전 및 서버 재조회 검증 완료/)).toBeVisible({
+    timeout: 20_000,
+  });
   await expect(
     page.getByRole("button", { name: "이전 재시도 승인", exact: true }),
-  ).toBeEnabled();
-  await page
-    .getByRole("button", { name: "이전 재시도 승인", exact: true })
-    .click();
-  await expect(page.getByText(/이전 및 서버 재조회 검증 완료/)).toBeVisible();
+  ).toHaveCount(0);
   expect(
     [...api.files.values()].filter((f) => f.appProperties.kind === "revision"),
   ).toHaveLength(2);

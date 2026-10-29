@@ -1,7 +1,8 @@
 import { KeyValueStore, localDb } from "./local-db";
 import { canonical, digest, validateIdeas } from "./integrity";
 import type { Idea } from "./model";
-import { RevisionLoader } from "./revision-loader";
+import { mapLimit, READ_CONCURRENCY, RevisionLoader } from "./revision-loader";
+import { runPool, type PoolOptions } from "./upload-pool";
 
 export type GoogleUser = {
   id: string;
@@ -235,6 +236,10 @@ export interface ImmutableRemote {
   readonly storageNamespace?: string;
   /** `key` narrows the listing to one content hash; filtering again is harmless. */
   list(kind: string, key?: string): Promise<RemoteFile[]>;
+  /** Many ids in one request, when the remote supports it. */
+  allocateMany?(count: number): Promise<string[]>;
+  /** Requests sent so far and the time they took, when the remote counts them. */
+  stats?(): { requests: number; ms: number };
   allocate(): Promise<string>;
   read(id: string): Promise<Blob>;
   create(id: string, key: string, kind: string, blob: Blob): Promise<void>;
@@ -243,16 +248,27 @@ export interface ImmutableRemote {
 export class GoogleDrive implements ImmutableRemote {
   readonly storageNamespace = driveSpace;
   private folderPromise?: Promise<string>;
+  private tally = { requests: 0, ms: 0 };
   constructor(readonly account: string) {}
+  stats() {
+    return { ...this.tally };
+  }
   private async request(path: string, init: RequestInit = {}, upload = false) {
     const active = current();
     if (!active || active.user.id !== this.account) throw new DriveAuthError();
     const url = `https://www.googleapis.com/${upload ? "upload/" : ""}drive/v3/${path}`;
-    const send = () =>
-      fetch(url, {
-        ...init,
-        headers: { ...init.headers, Authorization: `Bearer ${active.token}` },
-      });
+    const send = async () => {
+      const started = performance.now();
+      try {
+        return await fetch(url, {
+          ...init,
+          headers: { ...init.headers, Authorization: `Bearer ${active.token}` },
+        });
+      } finally {
+        this.tally.requests++;
+        this.tally.ms += performance.now() - started;
+      }
+    };
     let response = await send();
     // Reads are idempotent: ride out Drive's rate limiting and brief outages.
     for (
@@ -280,7 +296,10 @@ export class GoogleDrive implements ImmutableRemote {
       const error = new Error(
         `Drive 요청 실패 (${response.status}${safeReason}). 연결과 저장 공간을 확인하고 재시도하세요.`,
       );
-      Object.assign(error, { status: response.status });
+      Object.assign(error, {
+        status: response.status,
+        reason: typeof reason === "string" ? reason : undefined,
+      });
       throw error;
     }
     return response;
@@ -397,6 +416,22 @@ export class GoogleDrive implements ImmutableRemote {
     ).json();
     return result.ids[0] as string;
   }
+  /** Drive hands out up to 1000 ids per request. */
+  async allocateMany(count: number) {
+    const ids: string[] = [];
+    while (ids.length < count) {
+      const batch = Math.min(1000, count - ids.length);
+      const result = await (
+        await this.request(
+          `files/generateIds?count=${batch}&space=${driveSpace}&type=files`,
+        )
+      ).json();
+      if (!Array.isArray(result.ids) || result.ids.length !== batch)
+        throw new Error("Drive가 파일 ID를 모두 발급하지 않았습니다.");
+      ids.push(...result.ids);
+    }
+    return ids;
+  }
   async read(id: string) {
     return (
       await this.request(`files/${encodeURIComponent(id)}?alt=media`)
@@ -499,6 +534,183 @@ export class DriveRepository {
   }
   private revisionCacheKey(hash: string) {
     return `${this.account}:revision:${this.remote.storageNamespace ?? "default"}:${hash}`;
+  }
+  /**
+   * Stores many immutable files with one listing and one id request instead of
+   * a lookup and an id request per file. Everything stays idempotent:
+   * a file is named by its content hash, its Drive id is allocated and saved on
+   * this device BEFORE any bytes are sent, an upload that may have reached Drive
+   * is looked up by hash before it is repeated, and every file is read back and
+   * its checksum compared. Failures that are likely to pass (rate limits, 5xx,
+   * dropped connections) are retried with back-off. `onDone` runs as each
+   * distinct file is stored.
+   *
+   * `readBack: false` leaves that comparison to the caller, which must verify
+   * the files afterwards (`verifyRevisions`, `verifyImages`) before it reports
+   * success. A file that was already on Drive is always read back and compared.
+   */
+  async putMany(
+    kind: string,
+    blobs: Blob[],
+    options: {
+      onDone?: (hash: string) => void | Promise<void>;
+      pool?: PoolOptions;
+      readBack?: boolean;
+    } = {},
+  ) {
+    const hashes = await Promise.all(blobs.map((blob) => digest(blob)));
+    const unique = new Map<string, Blob>();
+    hashes.forEach((hash, i) => unique.has(hash) || unique.set(hash, blobs[i]));
+    const found = new Map<string, string>();
+    for (const file of [...(await this.remote.list(kind))].sort((a, b) =>
+      a.id.localeCompare(b.id),
+    ))
+      if (!found.has(file.appProperties.key))
+        found.set(file.appProperties.key, file.id);
+    const space = this.remote.storageNamespace
+      ? `${this.remote.storageNamespace}:`
+      : "";
+    const slot = (hash: string) =>
+      `${this.account}:upload:${space}${kind}:${hash}`;
+    const ids = new Map<string, string>();
+    const unallocated: string[] = [];
+    for (const hash of unique.keys()) {
+      if (found.has(hash)) continue;
+      const known = await this.db.get<string>(slot(hash));
+      if (known) ids.set(hash, known);
+      else unallocated.push(hash);
+    }
+    if (unallocated.length) {
+      const fresh = this.remote.allocateMany
+        ? await this.remote.allocateMany(unallocated.length)
+        : await mapLimit(unallocated, 1, () => this.remote.allocate());
+      for (const [i, hash] of unallocated.entries()) {
+        ids.set(hash, fresh[i]);
+        await this.db.set(slot(hash), fresh[i]); // persist BEFORE sending bytes
+      }
+    }
+    await runPool(
+      [...unique.keys()],
+      async (hash, _index, attempt) => {
+        let id = found.get(hash);
+        let created = false;
+        if (!id && attempt > 0) {
+          // The earlier try may have reached Drive although its reply was lost.
+          id = (await this.remote.list(kind, hash))
+            .filter((f) => f.appProperties.key === hash)
+            .sort((a, b) => a.id.localeCompare(b.id))[0]?.id;
+        }
+        if (!id) {
+          id = ids.get(hash)!;
+          try {
+            await this.remote.create(id, hash, kind, unique.get(hash)!);
+            created = true;
+          } catch (error) {
+            // Only an ID conflict can be a successful retry after a lost response.
+            if ((error as { status?: number }).status !== 409) throw error;
+          }
+        }
+        if (
+          (!created || options.readBack !== false) &&
+          (await digest(await this.remote.read(id))) !== hash
+        )
+          throw new Error("Drive 파일의 체크섬이 일치하지 않습니다.");
+        this.uploads.set(kind, this.uploadCount(kind) + 1);
+        await options.onDone?.(hash);
+      },
+      options.pool,
+    );
+    return hashes;
+  }
+  /** Appends new revisions of many ideas in one batch; see putMany. */
+  async appendMany(
+    items: { idea: Idea; parent: string | null }[],
+    options: {
+      onDone?: (index: number, hash: string) => void | Promise<void>;
+      pool?: PoolOptions;
+      readBack?: boolean;
+    } = {},
+  ) {
+    const revisions = items.map(({ idea, parent }): Revision => {
+      validateIdeas([idea]);
+      if (idea.user_id !== this.account)
+        throw new Error("다른 계정의 데이터입니다.");
+      return { schema: 1, parent, idea };
+    });
+    const blobs = revisions.map(
+      (r) => new Blob([canonical(r)], { type: "application/json" }),
+    );
+    const done = new Map<string, number[]>();
+    const hashes = await Promise.all(blobs.map((blob) => digest(blob)));
+    hashes.forEach((hash, i) => done.set(hash, [...(done.get(hash) ?? []), i]));
+    await this.putMany("revision", blobs, {
+      pool: options.pool,
+      readBack: options.readBack,
+      onDone: async (hash) => {
+        const first = done.get(hash)![0];
+        await this.loader.remember(hash, revisions[first]);
+        for (const i of done.get(hash)!) await options.onDone?.(i, hash);
+      },
+    });
+    return hashes;
+  }
+  /**
+   * `save` for many ideas: one listing for the version check, then one batch.
+   * An idea whose intended revision already exists is reported, not rewritten.
+   */
+  async saveMany(
+    items: { idea: Idea; parent: string | null }[],
+    options: {
+      onDone?: (index: number) => void | Promise<void>;
+      pool?: PoolOptions;
+      readBack?: boolean;
+    } = {},
+  ) {
+    const rows = await this.list();
+    const saved = items.map(({ idea }) => ({
+      ...idea,
+      version: idea.version + 1,
+    }));
+    const todo: { idea: Idea; parent: string | null; index: number }[] = [];
+    const heads = new Array<string>(items.length);
+    for (const [index, { idea, parent }] of items.entries()) {
+      const current = rows.find((r) => r.idea.id === idea.id);
+      const intended = await digest(
+        canonical({ schema: 1, parent, idea: saved[index] }),
+      );
+      if (current?.head === intended && !current.conflicts.length) {
+        heads[index] = intended;
+        await options.onDone?.(index);
+      } else if (
+        (current?.head ?? null) !== parent ||
+        current?.conflicts.length
+      )
+        throw new Error("VERSION_CONFLICT");
+      else todo.push({ idea: saved[index], parent, index });
+    }
+    const hashes = await this.appendMany(todo, {
+      pool: options.pool,
+      readBack: options.readBack,
+      onDone: (i) => options.onDone?.(todo[i].index),
+    });
+    todo.forEach((t, i) => (heads[t.index] = hashes[i]));
+    return saved.map((idea, i) => ({ idea, head: heads[i] }));
+  }
+  /** Re-reads exactly these revisions from Drive and checks their hashes. */
+  async verifyRevisions(hashes: string[]) {
+    return this.loader.verifyRemote(hashes);
+  }
+  /** Re-reads these pictures from Drive (one listing) and checks their hashes. */
+  async verifyImages(hashes: string[]) {
+    const files = new Map<string, string>();
+    for (const file of await this.remote.list("image"))
+      if (!files.has(file.appProperties.key))
+        files.set(file.appProperties.key, file.id);
+    await mapLimit([...new Set(hashes)], READ_CONCURRENCY, async (hash) => {
+      const id = files.get(hash);
+      if (!id || (await digest(await this.remote.read(id))) !== hash)
+        throw new Error("이전 후 이미지 검증 실패");
+    });
   }
   private checkRevision(value: unknown): Revision {
     const revision = value as Revision;

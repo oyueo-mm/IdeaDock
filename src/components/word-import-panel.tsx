@@ -7,6 +7,7 @@ import { folderTrashed, folderPath, type Folder } from "@/lib/folders";
 import { type Idea } from "@/lib/model";
 import { digest } from "@/lib/integrity";
 import { activeDriveRepository } from "@/lib/drive";
+import { describeStages } from "@/lib/stage-timer";
 import { localDb } from "@/lib/local-db";
 import { useDialogFocus } from "@/lib/use-dialog-focus";
 import { importWord, type WordImportProgress } from "@/lib/word-import";
@@ -648,14 +649,23 @@ export default function WordImportPanel({
                 </p>
               )}
               {progress && (
-                <p role="status">
-                  {progress.state === "verified"
-                    ? "Drive 문서·이미지 재조회 검증 완료"
-                    : progress.state === "failed"
-                      ? "실패 · 복구 백업과 원본 보존"
-                      : "업로드 중"}{" "}
-                  · {progress.done.length}/{progress.total}개 확인
-                </p>
+                <>
+                  <p role="status">
+                    {progress.state === "verified"
+                      ? "Drive 문서·이미지 재조회 검증 완료"
+                      : progress.state === "failed"
+                        ? "실패 · 복구 백업과 원본 보존"
+                        : (progress.stage ?? "업로드 중")}{" "}
+                    · {progress.done.length}/{progress.total}개 저장 완료
+                  </p>
+                  {!!progress.stages?.length && (
+                    <ul className="import-stages" aria-label="단계별 소요 시간">
+                      {describeStages(progress.stages).map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
+                    </ul>
+                  )}
+                </>
               )}
               {error && <p role="alert">{error}</p>}
             </section>

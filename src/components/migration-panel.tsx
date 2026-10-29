@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { useDialogFocus } from "@/lib/use-dialog-focus";
@@ -7,7 +7,17 @@ import { inspectLegacy, Inspection } from "@/lib/discovery";
 import { activeDriveRepository } from "@/lib/drive";
 import { dataUrl, readImage } from "@/lib/images";
 import { localDb } from "@/lib/local-db";
+import type { Idea } from "@/lib/model";
 import {
+  describeChanges,
+  hasChanges,
+  reviewImport,
+  REASON_TEXT,
+  type IdeaUpdate,
+  type ReviewAction,
+} from "@/lib/import-match";
+import {
+  ImportPlan,
   ImportSource,
   importAdapters,
   jsonSources,
@@ -17,7 +27,9 @@ import {
   prepareBackup,
   restoreDemoBackup,
   validateBackup,
+  describeProgress,
 } from "@/lib/migration";
+import { describeStages } from "@/lib/stage-timer";
 
 export function downloadJson(value: unknown, name: string) {
   const url = URL.createObjectURL(
@@ -36,6 +48,7 @@ export default function MigrationPanel({
   onRefresh,
   onBackup,
   wordImport,
+  existing = [],
 }: {
   account?: string;
   demo: boolean;
@@ -43,6 +56,8 @@ export default function MigrationPanel({
   onRefresh: () => Promise<void>;
   onBackup: () => Promise<void>;
   wordImport?: React.ReactNode;
+  /** Ideas already in the workspace, to find duplicates in an imported file. */
+  existing?: Idea[];
 }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -66,6 +81,7 @@ export default function MigrationPanel({
   const [draft, setDraft] = useState("");
   const [originalImport, setOriginalImport] = useState<unknown>();
   const [recoveryMessage, setRecoveryMessage] = useState("");
+  const [decisions, setDecisions] = useState<Record<string, ReviewAction>>({});
   const currentAccount = useRef(account);
   currentAccount.current = account;
   const sources = [
@@ -78,6 +94,55 @@ export default function MigrationPanel({
       : []),
     ...imports,
   ];
+  // Incoming ideas are compared with the workspace; a match is skipped unless
+  // the user chooses otherwise. Only a JSON file under review is checked: a
+  // recovery backup is restored as it is.
+  const review = useMemo(
+    () =>
+      dialog === "import" && account
+        ? reviewImport(
+            imports.flatMap((s) => s.ideas),
+            existing,
+          )
+        : [],
+    [dialog, account, imports, existing],
+  );
+  const matches = review.filter((r) => r.match);
+  const actionOf = (item: (typeof review)[number]) =>
+    decisions[item.idea.id] ?? item.action;
+  const tally = {
+    create: review.filter((r) => actionOf(r) === "create").length,
+    update: review.filter((r) => actionOf(r) === "update").length,
+    skip: review.filter((r) => actionOf(r) === "skip").length,
+  };
+  /** The choices of the preview, limited to what the backup contains. */
+  function importPlan(backup: MigrationBackup): ImportPlan | undefined {
+    if (!matches.length) return undefined;
+    const inBackup = new Set(
+      backup.sources.flatMap((s) => s.ideas.map((i) => i.id)),
+    );
+    const updates: IdeaUpdate[] = review.flatMap((r) =>
+      actionOf(r) === "update" &&
+      r.match &&
+      r.changes &&
+      hasChanges(r.changes) &&
+      inBackup.has(r.idea.id)
+        ? [
+            {
+              id: r.match.existing.id,
+              version: r.match.existing.version,
+              changes: r.changes,
+            },
+          ]
+        : [],
+    );
+    return {
+      create: review
+        .filter((r) => actionOf(r) === "create" && inBackup.has(r.idea.id))
+        .map((r) => r.idea.id),
+      updates,
+    };
+  }
   const optionKey = (source: ImportSource, index: number) =>
     `${source.id}:${index}`;
   const count = new Set(
@@ -288,6 +353,7 @@ export default function MigrationPanel({
                         setBackup(null);
                         setDraft("");
                         setImports([]);
+                        setDecisions({});
                         setSelected([]);
                         setDownloaded(false);
                         setProgress(null);
@@ -355,6 +421,7 @@ export default function MigrationPanel({
                             const accepted = edited.flatMap((s) =>
                               jsonSources({ ideas: s.ideas }, "json"),
                             );
+                            setDecisions({});
                             setImports(
                               accepted.map((s) => ({
                                 ...s,
@@ -399,6 +466,67 @@ export default function MigrationPanel({
                       {source.ideas.reduce((n, i) => n + i.images.length, 0)}개
                     </label>
                   ))}
+                  {matches.length > 0 && (
+                    <section className="import-review" aria-label="중복 검토">
+                      <h3>기존 아이디어와 겹치는 항목 {matches.length}개</h3>
+                      <p>
+                        겹치는 항목은 기본적으로 건너뜁니다. 새 아이디어로
+                        추가하거나, 기존 아이디어의 완료 상태와 GitHub 링크만
+                        갱신할 수 있습니다. 기존 설명과 이미지는 바뀌지
+                        않습니다.
+                      </p>
+                      <ul>
+                        {matches.map((item) => (
+                          <li key={item.idea.id}>
+                            <strong>{item.idea.title}</strong>
+                            <small>
+                              {REASON_TEXT[item.match!.reason]} · 기존 “
+                              {item.match!.existing.title}”
+                              {item.match!.existing.deleted_at
+                                ? " (휴지통)"
+                                : ""}{" "}
+                              ·{" "}
+                              {item.match!.reason === "file"
+                                ? "파일 안의 반복"
+                                : describeChanges(item.changes)}
+                            </small>
+                            <select
+                              aria-label={`${item.idea.title} 처리`}
+                              value={actionOf(item)}
+                              disabled={busy}
+                              onChange={(e) => {
+                                setDecisions((prev) => ({
+                                  ...prev,
+                                  [item.idea.id]: e.target
+                                    .value as ReviewAction,
+                                }));
+                                setBackup(null);
+                                setDownloaded(false);
+                              }}
+                            >
+                              <option value="skip">건너뛰기</option>
+                              <option
+                                value="create"
+                                disabled={item.match!.reason === "id"}
+                              >
+                                새 아이디어로 추가
+                              </option>
+                              <option
+                                value="update"
+                                disabled={!hasChanges(item.changes)}
+                              >
+                                완료 상태·GitHub 링크만 갱신
+                              </option>
+                            </select>
+                          </li>
+                        ))}
+                      </ul>
+                      <p role="status">
+                        새로 추가 {tally.create}개 · 기존 갱신 {tally.update}개
+                        · 건너뜀 {tally.skip}개
+                      </p>
+                    </section>
+                  )}
                   <button
                     className="settings-button"
                     disabled={
@@ -556,6 +684,7 @@ export default function MigrationPanel({
                                 if (currentAccount.current === target)
                                   setProgress(p);
                               },
+                              importPlan(backup),
                             );
                             if (currentAccount.current === target) {
                               setProgress(result);
@@ -599,11 +728,16 @@ export default function MigrationPanel({
                 </p>
               )}
               {progress && (
-                <p role="status">
-                  {progress.state === "verified"
-                    ? "이전 및 서버 재조회 검증 완료. 원본과 복구 백업은 보존되었습니다. 다른 기기에서도 확인해 주세요."
-                    : `${progress.verified.length}개 확인 · ${progress.state === "failed" ? "실패 지점부터 재시도할 수 있습니다." : "진행 중"}`}
-                </p>
+                <>
+                  <p role="status">{describeProgress(progress)}</p>
+                  {!!progress.stages?.length && (
+                    <ul className="import-stages" aria-label="단계별 소요 시간">
+                      {describeStages(progress.stages).map((line) => (
+                        <li key={line}>{line}</li>
+                      ))}
+                    </ul>
+                  )}
+                </>
               )}
               {error && <p role="alert">{error}</p>}
               {recoveryMessage && <p role="status">{recoveryMessage}</p>}
