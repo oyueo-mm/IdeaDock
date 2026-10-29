@@ -1990,3 +1990,60 @@ input[type="radio"] {
     padding-bottom: 96px;
   }
 }
+/* Writing-first detail: the body follows the title directly and grows with
+   its text; tags, links and dates are quiet; reference images come last. */
+.detail-title {
+  margin-bottom: 6px;
+}
+.memo-section {
+  padding: 0 0 14px;
+}
+.tiptap {
+  min-height: 280px;
+  padding: 10px 2px;
+}
+.tiptap p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  color: var(--muted);
+  pointer-events: none;
+}
+.detail-dates {
+  margin: 0;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.tag-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--muted);
+  padding: 4px 7px;
+  border-radius: 4px;
+}
+.tag-add:hover,
+.tag-add:focus-visible {
+  background: var(--soft);
+  color: var(--primary);
+}
+.row-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.row-link:hover,
+.row-link:focus-visible {
+  background: var(--soft);
+  color: var(--primary);
+}
+@media (max-width: 640px) {
+  .tiptap {
+    min-height: 200px;
+  }
+  .tag-add {
+    font-size: 13px;
+    padding: 8px 10px;
+  }
+}

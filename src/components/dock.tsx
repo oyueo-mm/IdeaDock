@@ -966,6 +966,7 @@ function Detail({
   const latest = useRef(idea);
   latest.current = idea;
   const [tagText, setTagText] = useState(""),
+    [tagOpen, setTagOpen] = useState(false),
     [linkOpen, setLinkOpen] = useState(false),
     [link, setLink] = useState<IdeaLink>({
       id: "",
@@ -976,6 +977,7 @@ function Detail({
     [uploading, setUploading] = useState(false),
     [urls, setUrls] = useState<Record<string, string>>({});
   const fileInput = useRef<HTMLInputElement>(null);
+  const tagCancel = useRef(false);
   function patch(changes: Partial<Idea>) {
     onChange({ ...latest.current, ...changes });
   }
@@ -1070,13 +1072,13 @@ function Detail({
     return attached;
   }
   function addTag() {
-    const name = tagText.trim().replace(/^#/, "");
-    if (name && !idea.tags.includes(name)) {
+    const name = tagText.trim().replace(/^#/, "").trim();
+    if (name && !latest.current.tags.includes(name)) {
       if (name.length > 50) {
         onError("태그는 50자 이하로 입력해 주세요.");
         return;
       }
-      patch({ tags: [...idea.tags, name] });
+      patch({ tags: [...latest.current.tags, name] });
     }
     setTagText("");
   }
@@ -1150,10 +1152,14 @@ function Detail({
             patch({ title: "제목 없는 아이디어" });
         }}
       />
-      <div className="detail-dates">
-        <span>만든 날 {date(idea.created_at)}</span>
-        <span>수정 {date(idea.updated_at)}</span>
-      </div>
+      <section className="memo-section" aria-label="아이디어 본문">
+        <Editor
+          content={idea.content}
+          onChange={(content, plain_text) => patch({ content, plain_text })}
+          onFiles={files}
+          onZoom={onZoom}
+        />
+      </section>
       <section className="detail-section">
         <div className="section-label">
           <Hash size={14} />
@@ -1191,101 +1197,43 @@ function Detail({
               </button>
             </span>
           ))}
-          <input
-            aria-label="태그 추가"
-            value={tagText}
-            placeholder="+ 태그 추가"
-            onChange={(e) => setTagText(e.target.value)}
-            onBlur={addTag}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.nativeEvent.isComposing) {
-                e.preventDefault();
-                addTag();
-              }
-            }}
-          />
-        </div>
-      </section>
-      <section className="detail-section memo-section">
-        <div className="section-label">
-          <FileText size={14} />
-          아이디어 메모
-        </div>
-        <Editor
-          content={idea.content}
-          onChange={(content, plain_text) => patch({ content, plain_text })}
-          onFiles={files}
-          onZoom={onZoom}
-        />
-      </section>
-      <section className="detail-section">
-        <div className="section-label">
-          <ImagePlus size={14} />
-          참고 이미지 <small>{idea.images.length}/12</small>
-          <button
-            aria-label="이미지 첨부"
-            disabled={uploading}
-            onClick={() => fileInput.current?.click()}
-          >
-            {uploading ? (
-              <LoaderCircle className="spin" size={15} />
-            ) : (
-              <Plus size={15} />
-            )}
-          </button>
-        </div>
-        <input
-          ref={fileInput}
-          type="file"
-          multiple
-          hidden
-          accept="image/png,image/jpeg,image/webp,image/gif"
-          onChange={(e) => void files(Array.from(e.target.files || []))}
-        />
-        <div className="image-grid">
-          {idea.images.map((image) => (
-            <div key={image.id}>
-              {urls[image.id] ? (
-                <button onClick={() => onZoom(urls[image.id])}>
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={urls[image.id]} alt={image.original_filename} />
-                </button>
-              ) : (
-                <span>이미지 준비 중</span>
-              )}
-              <button
-                className="image-remove"
-                aria-label={`${image.original_filename} 이미지 삭제`}
-                onClick={() =>
-                  patch({
-                    images: idea.images.filter((i) => i.id !== image.id),
-                    content: removeImageContent(idea.content, image.id),
-                  })
+          {tagOpen ? (
+            <input
+              autoFocus
+              aria-label="태그 추가"
+              value={tagText}
+              placeholder="태그 이름"
+              onChange={(e) => setTagText(e.target.value)}
+              onBlur={() => {
+                if (!tagCancel.current) addTag();
+                tagCancel.current = false;
+                setTagOpen(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.nativeEvent.isComposing) return;
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  addTag();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  tagCancel.current = true;
+                  setTagText("");
+                  e.currentTarget.blur();
                 }
-              >
-                <X size={13} />
-              </button>
-            </div>
-          ))}
+              }}
+            />
+          ) : (
+            <button
+              className="tag-add"
+              aria-label="태그 추가"
+              onClick={() => setTagOpen(true)}
+            >
+              <Plus size={12} />
+              태그 추가
+            </button>
+          )}
         </div>
-        <button
-          className="upload-area"
-          disabled={uploading}
-          onClick={() => fileInput.current?.click()}
-          onDragOver={(e) => e.preventDefault()}
-          onDrop={(e) => {
-            e.preventDefault();
-            void files(Array.from(e.dataTransfer.files));
-          }}
-        >
-          <ImagePlus size={21} />
-          <span>
-            {uploading
-              ? "이미지 업로드 중…"
-              : "이미지를 끌어 놓거나 클릭해 첨부"}
-          </span>
-          <small>본문에 붙여넣기도 가능 · 최대 5MB</small>
-        </button>
       </section>
       <section className="detail-section">
         <div className="section-label">
@@ -1386,6 +1334,79 @@ function Detail({
             </div>
           </form>
         )}
+      </section>
+      <div className="detail-dates" aria-label="생성·수정 날짜">
+        <span>만든 날 {date(idea.created_at)}</span>
+        <span>수정 {date(idea.updated_at)}</span>
+      </div>
+      <section className="detail-section">
+        <div className="section-label">
+          <ImagePlus size={14} />
+          참고 이미지 <small>{idea.images.length}/12</small>
+          <button
+            aria-label="이미지 첨부"
+            disabled={uploading}
+            onClick={() => fileInput.current?.click()}
+          >
+            {uploading ? (
+              <LoaderCircle className="spin" size={15} />
+            ) : (
+              <Plus size={15} />
+            )}
+          </button>
+        </div>
+        <input
+          ref={fileInput}
+          type="file"
+          multiple
+          hidden
+          accept="image/png,image/jpeg,image/webp,image/gif"
+          onChange={(e) => void files(Array.from(e.target.files || []))}
+        />
+        <div className="image-grid">
+          {idea.images.map((image) => (
+            <div key={image.id}>
+              {urls[image.id] ? (
+                <button onClick={() => onZoom(urls[image.id])}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={urls[image.id]} alt={image.original_filename} />
+                </button>
+              ) : (
+                <span>이미지 준비 중</span>
+              )}
+              <button
+                className="image-remove"
+                aria-label={`${image.original_filename} 이미지 삭제`}
+                onClick={() =>
+                  patch({
+                    images: idea.images.filter((i) => i.id !== image.id),
+                    content: removeImageContent(idea.content, image.id),
+                  })
+                }
+              >
+                <X size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+        <button
+          className="upload-area"
+          disabled={uploading}
+          onClick={() => fileInput.current?.click()}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault();
+            void files(Array.from(e.dataTransfer.files));
+          }}
+        >
+          <ImagePlus size={21} />
+          <span>
+            {uploading
+              ? "이미지 업로드 중…"
+              : "이미지를 끌어 놓거나 클릭해 첨부"}
+          </span>
+          <small>본문에 붙여넣기도 가능 · 최대 5MB</small>
+        </button>
       </section>
     </div>
   );

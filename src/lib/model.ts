@@ -64,6 +64,12 @@ export function validUrl(value: string) {
     return false;
   }
 }
+/** The first safe GitHub and website link, the ones a list row opens directly. */
+export function shortcutLinks(links: IdeaLink[]) {
+  const first = (type: IdeaLink["type"]) =>
+    links.find((l) => l.type === type && validUrl(l.url));
+  return { github: first("github"), website: first("website") };
+}
 export function validateImage(file: Pick<File, "type" | "size">) {
   if (
     !["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type)

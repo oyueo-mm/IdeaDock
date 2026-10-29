@@ -9,6 +9,7 @@ import {
   type DragEvent,
   type PointerEvent,
   type KeyboardEvent,
+  type ReactNode,
 } from "react";
 import {
   ChevronRight,
@@ -18,8 +19,15 @@ import {
   Pin,
   RotateCcw,
   ExternalLink,
+  Github,
 } from "lucide-react";
-import { type Idea, type Filter, selectIdeas } from "@/lib/model";
+import {
+  type Idea,
+  type IdeaLink,
+  type Filter,
+  selectIdeas,
+  shortcutLinks,
+} from "@/lib/model";
 import {
   type Folder,
   folderPath,
@@ -464,7 +472,7 @@ export function useExplorer({
     const el = e.target as HTMLElement;
     if (
       el.isContentEditable ||
-      el.closest("input,textarea,select,[contenteditable=true]")
+      el.closest("a,input,textarea,select,[contenteditable=true]")
     )
       return;
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") {
@@ -693,6 +701,35 @@ export function useExplorer({
   };
 }
 export type Explorer = ReturnType<typeof useExplorer>;
+
+/** GitHub and website shortcuts: they open a new tab and nothing else, so
+ *  they never select, drag or complete the row they sit in. */
+function RowLinks({ idea }: { idea: Idea }) {
+  const { github, website } = shortcutLinks(idea.links);
+  const link = (l: IdeaLink, label: string, icon: ReactNode) => (
+    <a
+      className="icon-button row-link"
+      aria-label={`${idea.title} ${label} 열기`}
+      title={l.url}
+      href={l.url}
+      target="_blank"
+      rel="noopener noreferrer"
+      draggable={false}
+      onClick={(ev) => ev.stopPropagation()}
+      onDoubleClick={(ev) => ev.stopPropagation()}
+      onPointerDown={(ev) => ev.stopPropagation()}
+      onContextMenu={(ev) => ev.stopPropagation()}
+    >
+      {icon}
+    </a>
+  );
+  return (
+    <>
+      {github && link(github, "GitHub", <Github size={15} />)}
+      {website && link(website, "웹사이트", <ExternalLink size={15} />)}
+    </>
+  );
+}
 
 export function FolderTree({ e }: { e: Explorer }) {
   const visible = e.folders.filter((f) => !folderTrashed(e.folders, f.id));
@@ -1252,17 +1289,7 @@ export function ExplorerList({
               </span>
             </button>
             <div className="row-actions">
-              {idea.links.find((l) => l.type === "website") && (
-                <a
-                  className="icon-button"
-                  aria-label={`${idea.title} 웹사이트 열기`}
-                  href={idea.links.find((l) => l.type === "website")!.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  <ExternalLink size={15} />
-                </a>
-              )}
+              <RowLinks idea={idea} />
               {idea.deleted_at || folderTrashed(e.folders, idea.folder_id) ? (
                 <button
                   className="icon-button"

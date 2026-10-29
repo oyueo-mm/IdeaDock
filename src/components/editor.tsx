@@ -1,5 +1,5 @@
 "use client";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import {
   useEditor,
   EditorContent,
@@ -11,6 +11,7 @@ import {
 import StarterKit from "@tiptap/starter-kit";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
+import { Placeholder } from "@tiptap/extensions";
 import {
   Bold,
   Italic,
@@ -112,6 +113,10 @@ export default function Editor({
   onFiles: (files: File[]) => Promise<IdeaImage[]>;
   onZoom: (url: string) => void;
 }) {
+  // Documents this editor emitted itself. Saves can hand an older one back as
+  // `content` while typing continues; resetting to it would move the cursor
+  // and drop keystrokes.
+  const emitted = useRef<string[]>([]);
   async function insertFiles(files: File[]) {
     const images = await onFiles(files);
     if (!editor || editor.isDestroyed) return;
@@ -134,6 +139,9 @@ export default function Editor({
       TaskList,
       TaskItem.configure({ nested: true }),
       ImageNode.configure({ onZoom }),
+      Placeholder.configure({
+        placeholder: "아이디어를 자유롭게 적어 보세요…",
+      }),
     ],
     content,
     immediatelyRender: false,
@@ -162,10 +170,17 @@ export default function Editor({
         return false;
       },
     },
-    onUpdate: ({ editor }) => onChange(editor.getJSON(), editor.getText()),
+    onUpdate: ({ editor }) => {
+      const json = editor.getJSON();
+      emitted.current = [...emitted.current.slice(-19), JSON.stringify(json)];
+      onChange(json, editor.getText());
+    },
   });
   useEffect(() => {
-    if (editor && JSON.stringify(editor.getJSON()) !== JSON.stringify(content))
+    if (!editor) return;
+    const next = JSON.stringify(content);
+    if (emitted.current.includes(next)) return;
+    if (JSON.stringify(editor.getJSON()) !== next)
       editor.commands.setContent(content, { emitUpdate: false });
   }, [content, editor]);
   if (!editor) return <div className="editor-loading">편집기 준비 중…</div>;
