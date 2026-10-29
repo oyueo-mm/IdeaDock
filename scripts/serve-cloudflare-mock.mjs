@@ -19,19 +19,22 @@ const { values } = parseArgs({
   },
 });
 const origin = `http://${values.hostname}:${values.port}`;
+// Fake values for the mock Google only; no real credential exists here.
+const MOCK_CLIENT = "mock-client.apps.googleusercontent.com";
+const MOCK_SECRET = "mock-secret-not-a-real-credential";
 const clock = { offset: 0 };
 const now = () => Date.now() + clock.offset;
 const google = createMockGoogle({
-  clientId: "mock-client.apps.googleusercontent.com",
-  clientSecret: "mock-secret-not-a-real-credential",
+  clientId: MOCK_CLIENT,
+  clientSecret: MOCK_SECRET,
   now,
   base: `${origin}/__mock/google`,
 });
 const { DB, raw } = sqliteD1();
 const env = {
   DB,
-  GOOGLE_CLIENT_ID: "mock-client.apps.googleusercontent.com",
-  GOOGLE_CLIENT_SECRET: "mock-secret-not-a-real-credential",
+  GOOGLE_CLIENT_ID: MOCK_CLIENT,
+  GOOGLE_CLIENT_SECRET: MOCK_SECRET,
   TOKEN_ENCRYPTION_KEY: base64url(crypto.getRandomValues(new Uint8Array(32))),
   APP_ORIGIN: origin,
 };
