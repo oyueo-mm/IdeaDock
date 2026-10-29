@@ -1233,23 +1233,18 @@ export function ExplorerList({
               <span className="idea-preview">
                 {idea.plain_text || "본문 없음"}
               </span>
-              <span className="idea-meta">
-                {idea.tags.map((t, index) => (
-                  <span key={t} className={`tag-chip color-${index % 5}`}>
-                    {t}
-                  </span>
-                ))}
-                <span>
-                  {new Date(idea.updated_at).toLocaleDateString("ko-KR", {
-                    month: "short",
-                    day: "numeric",
-                  })}
+              {(idea.tags.length > 0 || idea.images.length > 0) && (
+                <span className="idea-meta">
+                  {idea.tags.map((t, index) => (
+                    <span key={t} className={`tag-chip color-${index % 5}`}>
+                      {t}
+                    </span>
+                  ))}
+                  {idea.images.length > 0 && (
+                    <span>이미지 {idea.images.length}</span>
+                  )}
                 </span>
-                {idea.provenance && <span>이전한 아이디어</span>}
-                {idea.images.length > 0 && (
-                  <span>이미지 {idea.images.length}</span>
-                )}
-              </span>
+              )}
             </button>
             <div className="row-actions">
               {idea.links.find((l) => l.type === "website") && (

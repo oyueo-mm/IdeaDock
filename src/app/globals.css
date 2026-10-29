@@ -488,12 +488,15 @@ button:hover:not(:disabled) {
 .idea-preview {
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 1;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
   color: var(--muted);
   font-size: 11px;
   margin-top: 7px;
   line-height: 1.7;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
 }
 .idea-meta {
   display: flex;
