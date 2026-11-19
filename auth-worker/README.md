@@ -12,6 +12,20 @@ This is an **opt-in migration**, not a replacement for the existing GitHub Pages
 - Every refresh is performed by Worker on demand; Drive continues to hold all idea content, revisions and images.
 - The old Github Pages login path remains unchanged while `NEXT_PUBLIC_AUTH_MODE` is unset.
 
+
+## Recommended activation: GitHub Actions (no local Cloudflare CLI required)
+
+After this feature is merged and the one-time Google Cloud + Cloudflare resources exist, the repository has a **manual, main-only** workflow named **Deploy IdeaDock auth Worker (manual)**. It does not run automatically, never changes the normal Pages CI, and must remain staging until live authorization and cross-device testing succeed.
+
+1. In Cloudflare create a Workers account, choose a `workers.dev` subdomain, and create a D1 database named `ideadock-auth` (get its database ID). Create an API token with permissions to edit Workers and D1 for this account.
+2. In GitHub **Settings → Secrets and variables → Actions → Variables**, add `CF_D1_DATABASE_ID` with the new D1 database ID.
+3. In GitHub **Settings → Environments**, create `ideadock-auth-staging` with required reviewers if desired, and place the following as **environment secrets**: `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `SESSION_ENCRYPTION_KEY`, `APP_ORIGIN`. `SESSION_ENCRYPTION_KEY` is an independently generated 32-byte random base64 value; never expose it in issues or chat.
+4. In Google Cloud register the **exact** redirect URI `<APP_ORIGIN>/IdeaDock/api/auth/callback` for the Google Web OAuth client from the **original Drive-enabled Cloud project**. The OAuth consent screen should be appropriately published before depending on long-term refresh.
+5. In **Actions → Deploy IdeaDock auth Worker (manual) → Run workflow**, run on `main` after its tests pass. The workflow validates configuration, runs tests, builds Worker-mode assets, applies D1 migrations, deploys, sets Worker-only secrets, and verifies `GET /IdeaDock/api/auth/session` returns 401 without a session.
+6. **Do not redirect existing users yet.** Check the Worker URL in a new browser, sign in to the existing Google account, verify Drive content access, perform cross-device edit/sync and full logout/restart/recovery checks. If older drafts remain only in `github.io` browser storage, finish or export them before switching.
+
+The owner must provision these resources because they cannot be created from GitHub source code alone. A successful CI/workflow only verifies infrastructure and the unauthenticated endpoint; **it does not prove that real Google OAuth consent, Drive data access, refresh-token retention, or cross-device behavior work**.
+
 ## One-time Cloudflare + Google Cloud setup (owner action)
 
 1. Create a Cloudflare account and use its Workers feature. A dedicated domain is optional because a `workers.dev` subdomain is sufficient when **both the UI and auth API are served from the same Worker origin**.
