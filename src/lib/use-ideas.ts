@@ -238,11 +238,10 @@ export function useDriveIdeas() {
         if (verified) setUser(verified);
         setRestored(true);
       }).catch((error) => {
-        // On a genuine network outage cached drafts remain available for offline work.
-        if (!navigator.onLine) {
-          const remembered = rememberedDriveUser();
-          if (remembered) setUser(remembered);
-        }
+        // Transient auth-service outages must not hide locally saved drafts.
+        // A verified 401 is handled as "not logged in" above, not as an outage.
+        const remembered = rememberedDriveUser();
+        if (remembered) setUser(remembered);
         report(error);
         setRestored(true);
       });
