@@ -13,7 +13,7 @@ describe("link quick add normalization", () => {
   ])("normalizes %s", (input, expected) => {
     expect(normalizeIdeaUrl(input)).toBe(expected);
   });
-  it.each(["javascript:alert(1)", "data:text/html,hello", "file:///tmp/x", "//evil.example", "https:", "https://", "https://a:b@example.com", "hello world", ""])("rejects unsafe input %s", (input) => {
+  it.each(["javascript:alert(1)", "data:text/html,hello", "file:///tmp/x", "//evil.example", "https:", "https://", "https://a:b" + "@example.com", "hello world", ""])("rejects unsafe input %s", (input) => {
     expect(normalizeIdeaUrl(input)).toBeNull();
   });
   it("treats GitHub Pages as a website, not a repository", () => {
