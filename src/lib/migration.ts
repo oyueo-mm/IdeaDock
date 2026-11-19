@@ -168,7 +168,7 @@ export async function prepareBackup(
   const images: BackupImage[] = [];
   for (const path of new Set(
     snapshot.flatMap((s) =>
-      s.ideas.flatMap((i) => i.images.map((im) => im.storage_path)),
+      s.ideas.flatMap((i) => [...i.images, ...(i.checkpoints ?? []).flatMap((c) => c.snapshot.images)].map((im) => im.storage_path)),
     ),
   )) {
     const blob = await read(path);
@@ -220,7 +220,7 @@ export async function validateBackup(
   }
   for (const s of backup.sources)
     for (const i of s.ideas)
-      for (const im of i.images)
+      for (const im of [...i.images, ...(i.checkpoints ?? []).flatMap((c) => c.snapshot.images)])
         if (!paths.has(im.storage_path))
           throw new Error("백업에 이미지 원본이 누락되었습니다.");
 }
