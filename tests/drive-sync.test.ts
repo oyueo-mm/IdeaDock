@@ -32,6 +32,9 @@ vi.mock("../src/lib/local-db", () => ({
   },
 }));
 vi.mock("../src/lib/drive", () => ({
+  workerAuthEnabled: false,
+  restoreWorkerSession: vi.fn(async () => null),
+  logoutWorkerSession: vi.fn(async () => {}),
   driveConfigured: false,
   driveCacheKey: (account: string) => `${account}:cache`,
   loadGoogle: vi.fn(),

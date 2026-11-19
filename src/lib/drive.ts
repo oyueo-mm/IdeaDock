@@ -33,7 +33,8 @@ declare global {
     google?: GoogleIdentity;
   }
 }
-export const driveConfigured = !!process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
+export const workerAuthEnabled = process.env.NEXT_PUBLIC_AUTH_MODE === "worker";
+export const driveConfigured = workerAuthEnabled || !!process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID;
 export const driveSpace =
   process.env.NEXT_PUBLIC_GOOGLE_DRIVE_SPACE === "appDataFolder"
     ? "appDataFolder"
@@ -57,6 +58,8 @@ let session: Session | undefined;
 let restored = false;
 let loading: Promise<void> | undefined;
 let expiry: ReturnType<typeof setTimeout> | undefined;
+let renewalTimer: ReturnType<typeof setTimeout> | undefined;
+let ongoingWorkerSession: Promise<GoogleUser | null> | null = null;
 const listeners = new Set<() => void>();
 export class DriveAuthError extends Error {
   constructor() {
@@ -108,6 +111,8 @@ function setSession(next: Session | undefined, quiet = false) {
   session = next;
   if (expiry) clearTimeout(expiry);
   expiry = undefined;
+  if (renewalTimer) clearTimeout(renewalTimer);
+  renewalTimer = undefined;
   try {
     if (next)
       storage("sessionStorage")?.setItem(sessionKey, JSON.stringify(next));
@@ -115,11 +120,18 @@ function setSession(next: Session | undefined, quiet = false) {
   } catch {
     // The in-memory session still works for this page.
   }
-  if (next)
+  if (next) {
     expiry = setTimeout(
       () => setSession(undefined),
-      Math.min(next.expires - Date.now(), 2 ** 31 - 1),
+      Math.max(0, Math.min(next.expires - Date.now(), 2 ** 31 - 1)),
     );
+    if (workerAuthEnabled) {
+      renewalTimer = setTimeout(
+        () => { void restoreWorkerSession().catch(() => {}); },
+        Math.max(1000, next.expires - Date.now() - 90000),
+      );
+    }
+  }
   if (!quiet) listeners.forEach((listener) => listener());
 }
 function current() {
@@ -148,6 +160,41 @@ export function subscribeDriveSession(listener: () => void) {
   listeners.add(listener);
   return () => void listeners.delete(listener);
 }
+/** Retrieve a short-lived token from our same-origin Worker; no refresh token enters JS. */
+export async function restoreWorkerSession(force = false): Promise<GoogleUser | null> {
+  if (!workerAuthEnabled) return null;
+  if (ongoingWorkerSession) return ongoingWorkerSession;
+  ongoingWorkerSession = (async () => {
+    const response = await fetch(`/IdeaDock/api/auth/session${force ? "?force=1" : ""}`, {
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
+    if (response.status === 401) {
+      setSession(undefined);
+      return null;
+    }
+    if (!response.ok) throw new DriveAuthError();
+    const result = (await response.json()) as {
+      authenticated?: boolean; token?: string; expires?: number; user?: unknown;
+    };
+    if (result.authenticated !== true || typeof result.token !== "string" ||
+        typeof result.expires !== "number" || result.expires <= Date.now() ||
+        !isUser(result.user)) throw new DriveAuthError();
+    const user = result.user;
+    setSession({ token: result.token, expires: Math.min(result.expires, Date.now() + 3570000), user });
+    return user;
+  })().finally(() => { ongoingWorkerSession = null; });
+  return ongoingWorkerSession;
+}
+export async function logoutWorkerSession(): Promise<void> {
+  if (!workerAuthEnabled) return;
+  const response = await fetch("/IdeaDock/api/auth/logout", {
+    method: "POST", credentials: "same-origin", cache: "no-store",
+  });
+  if (!response.ok) throw new Error("인증 서버 로그아웃에 실패했습니다. 다시 시도해 주세요.");
+  forgetDriveUser();
+}
 export function loadGoogle() {
   return (loading ??= new Promise<void>((resolve, reject) => {
     if (window.google) return resolve();
@@ -170,6 +217,10 @@ export function loadGoogle() {
 export async function connectDrive(
   options: { hint?: GoogleUser } = {},
 ): Promise<GoogleUser> {
+  if (workerAuthEnabled) {
+    const url = `/IdeaDock/api/auth/start${options.hint ? "" : "?switch=1"}`;
+    return new Promise<GoogleUser>(() => { window.location.assign(url); });
+  }
   if (!driveConfigured)
     throw new Error("Google OAuth 클라이언트 ID 설정이 필요합니다.");
   await loadGoogle();
@@ -254,22 +305,26 @@ export class GoogleDrive implements ImmutableRemote {
     return { ...this.tally };
   }
   private async request(path: string, init: RequestInit = {}, upload = false) {
-    const active = current();
+    let active = current();
+    if (workerAuthEnabled && (!active || active.user.id !== this.account)) {
+      await restoreWorkerSession();
+      active = current();
+    }
     if (!active || active.user.id !== this.account) throw new DriveAuthError();
     const url = `https://www.googleapis.com/${upload ? "upload/" : ""}drive/v3/${path}`;
-    const send = async () => {
+    const send = async (token: string) => {
       const started = performance.now();
       try {
         return await fetch(url, {
           ...init,
-          headers: { ...init.headers, Authorization: `Bearer ${active.token}` },
+          headers: { ...init.headers, Authorization: `Bearer ${token}` },
         });
       } finally {
         this.tally.requests++;
         this.tally.ms += performance.now() - started;
       }
     };
-    let response = await send();
+    let response = await send(active.token);
     // Reads are idempotent: ride out Drive's rate limiting and brief outages.
     for (
       let attempt = 0;
@@ -279,11 +334,17 @@ export class GoogleDrive implements ImmutableRemote {
       attempt++
     ) {
       await new Promise((resolve) => setTimeout(resolve, 400 * 2 ** attempt));
-      response = await send();
+      response = await send(active.token);
+    }
+    if (response.status === 401 && workerAuthEnabled) {
+      const refreshed = await restoreWorkerSession(true);
+      const token = current();
+      if (refreshed?.id === this.account && token?.user.id === this.account)
+        response = await send(token.token);
     }
     if (response.status === 401) {
       // Revoked or expired early: forget the token, keep the local drafts.
-      if (session === active) setSession(undefined);
+      setSession(undefined);
       throw new DriveAuthError();
     }
     if (!response.ok) {
