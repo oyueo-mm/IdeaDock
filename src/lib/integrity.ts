@@ -110,6 +110,37 @@ export function validateIdeas(input: unknown): asserts input is Idea[] {
         !validUrl(link.url)
       )
         fail(i.id, "link");
+    if (i.improvements !== undefined) {
+      if (!Array.isArray(i.improvements)) fail(i.id, "improvements");
+      const seen = new Set<string>();
+      for (const note of i.improvements) {
+        if (!note || typeof note.id !== "string" || !note.id || seen.has(note.id) ||
+            typeof note.text !== "string" || typeof note.is_done !== "boolean" ||
+            typeof note.created_at !== "string" || !Number.isFinite(Date.parse(note.created_at)) ||
+            typeof note.updated_at !== "string" || !Number.isFinite(Date.parse(note.updated_at)) ||
+            (note.completed_at !== null && (typeof note.completed_at !== "string" ||
+              !Number.isFinite(Date.parse(note.completed_at)))) ||
+            (note.version_id !== undefined && typeof note.version_id !== "string"))
+          fail(i.id, "improvement");
+        seen.add(note.id);
+      }
+    }
+    if (i.checkpoints !== undefined) {
+      if (!Array.isArray(i.checkpoints)) fail(i.id, "checkpoints");
+      const seen = new Set<string>();
+      for (const checkpoint of i.checkpoints) {
+        if (!checkpoint || typeof checkpoint.id !== "string" || !checkpoint.id ||
+            seen.has(checkpoint.id) || typeof checkpoint.label !== "string" ||
+            !checkpoint.label.trim() || typeof checkpoint.summary !== "string" ||
+            typeof checkpoint.created_at !== "string" ||
+            !Number.isFinite(Date.parse(checkpoint.created_at)) ||
+            !checkpoint.snapshot || typeof checkpoint.snapshot !== "object")
+          fail(i.id, "checkpoint");
+        seen.add(checkpoint.id);
+        const snapshot = checkpoint.snapshot;
+        validateIdeas([{ ...i, ...snapshot, id: checkpoint.id, checkpoints: undefined }]);
+      }
+    }
     for (const image of i.images)
       if (
         typeof image.storage_path !== "string" ||
