@@ -2164,3 +2164,15 @@ input[type="radio"] {
   .detail-tabs button { font-size: 13px; padding: 11px 4px; }
   .workflow-note { font-size: 13px; }
 }
+
+/* Inline capture preserves the explorer header's original vertical density. */
+.list-title-row { flex-wrap: wrap; }
+.list-title-row .quick-create { flex: 1 1 180px; min-width: 0; max-width: 480px; margin: 0; }
+.list-title-row .quick-create input { padding: 6px 8px; }
+.list-title-row .quick-create button { padding: 6px 9px; }
+.section-label .link-heading-button { margin-left: 0; }
+@media (max-width: 640px) {
+  .list-title-row .quick-create { order: 3; flex: 1 1 100%; max-width: none; }
+  .list-title-row .sort-field { order: 2; }
+  .list-title-row h1 { order: 1; }
+}
