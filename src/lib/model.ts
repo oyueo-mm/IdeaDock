@@ -90,7 +90,7 @@ export function normalizeIdeaUrl(input: string): string | null {
     if (!["https:", "http:"].includes(url.protocol) || !url.hostname ||
         url.username || url.password || !url.hostname.includes(".") &&
         url.hostname !== "localhost") return null;
-    return url.toString();
+    return hasScheme ? value : url.toString();
   } catch {
     return null;
   }
