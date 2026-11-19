@@ -1312,7 +1312,7 @@ function Detail({
         {(mode === "body" || mode === "links") && (
           <form className="workflow-input" onSubmit={(e) => { e.preventDefault(); saveQuickLink(); }}>
             <input autoFocus={mode === "links"} ref={quickLinkRef} aria-label="관련 링크 빠른 추가" placeholder="주소를 붙여넣으세요…" value={quickLink} onChange={(e) => setQuickLink(e.target.value)} />
-            <button className="primary" type="submit" disabled={!quickLink.trim()} aria-label="관련 링크 추가"><Plus size={16}/></button>
+            <button className="primary" type="submit" disabled={!quickLink.trim()} aria-label="링크 빠른 저장"><Plus size={16}/></button>
           </form>
         )}
         {idea.links.map((l) => (
