@@ -145,6 +145,8 @@ async function callback(request, env) {
     await seal(tokens.body.refresh_token, env, "refresh-token"),
     await seal(tokens.body.access_token, env, "access-token"),
     accessExpires, expires, Date.now()).run();
+  const previous = await currentSession(request, env);
+  if (previous) await deleteSession(env, previous.sid);
   return redirect(`${env.APP_ORIGIN}${BASE}/`, [cookie(SESSION_COOKIE, sessionId, SESSION_SECONDS), clearFlow]);
 }
 async function deleteSession(env, sid) {
@@ -168,7 +170,7 @@ async function session(request, env) {
   const { sid, row, raw } = current;
   let accessToken;
   let accessExpires = Number(row.access_expires);
-  if (accessExpires <= Date.now() + 90000) {
+  if (accessExpires <= Date.now() + 90000 || new URL(request.url).searchParams.get("force") === "1") {
     const refresh = await unseal(row.refresh_ciphertext, env, "refresh-token");
     const tokens = await exchange({ client_id: env.GOOGLE_CLIENT_ID, client_secret: env.GOOGLE_CLIENT_SECRET, refresh_token: refresh, grant_type: "refresh_token" });
     if (!tokens.ok) {
