@@ -1002,6 +1002,9 @@ function Detail({
   }, [focusTitle]);
   const latest = useRef(idea);
   latest.current = idea;
+  const [mode, setMode] = useState<"body" | "improvements" | "versions" | "links">("body");
+  const [quickLink, setQuickLink] = useState("");
+  const quickLinkRef = useRef<HTMLInputElement>(null);
   const [tagText, setTagText] = useState(""),
     [tagOpen, setTagOpen] = useState(false),
     [linkOpen, setLinkOpen] = useState(false),
@@ -1016,7 +1019,9 @@ function Detail({
   const fileInput = useRef<HTMLInputElement>(null);
   const tagCancel = useRef(false);
   function patch(changes: Partial<Idea>) {
-    onChange({ ...latest.current, ...changes });
+    const next = { ...latest.current, ...changes };
+    latest.current = next;
+    onChange(next);
   }
   useEffect(() => {
     let live = true;
@@ -1119,22 +1124,34 @@ function Detail({
     }
     setTagText("");
   }
-  function saveLink() {
-    if (!validUrl(link.url)) {
-      onError("올바른 HTTP 또는 HTTPS URL을 입력해 주세요.");
+  function saveQuickLink() {
+    const url = normalizeIdeaUrl(quickLink);
+    if (!url) {
+      onError("올바른 웹사이트 주소를 입력해 주세요.");
       return;
     }
-    const value = {
-      ...link,
-      id: link.id || crypto.randomUUID(),
-      label:
-        link.label.trim() || (link.type === "github" ? "GitHub" : "웹사이트"),
-    };
-    patch({
-      links: idea.links.some((l) => l.id === value.id)
-        ? idea.links.map((l) => (l.id === value.id ? value : l))
-        : [...idea.links, value],
-    });
+    if (latest.current.links.some((item) => item.url === url)) {
+      onError("이미 등록된 링크입니다.");
+      return;
+    }
+    const type = inferLinkType(url);
+    const host = new URL(url).hostname;
+    const label = type === "github" ? "GitHub" : host.endsWith(".github.io") ? "GitHub Pages" : host.replace(/^www\./, "");
+    patch({ links: [...latest.current.links, { id: crypto.randomUUID(), url, label, type }] });
+    setQuickLink("");
+    quickLinkRef.current?.focus();
+  }
+  function saveLink() {
+    const url = normalizeIdeaUrl(link.url);
+    if (!url) {
+      onError("올바른 HTTP 또는 HTTPS 주소를 입력해 주세요.");
+      return;
+    }
+    const value = { ...link, url, id: link.id || crypto.randomUUID(),
+      label: link.label.trim() || (link.type === "github" ? "GitHub" : "웹사이트") };
+    patch({ links: latest.current.links.some((l) => l.id === value.id)
+      ? latest.current.links.map((l) => l.id === value.id ? value : l)
+      : [...latest.current.links, value] });
     setLinkOpen(false);
   }
   return (
@@ -1189,7 +1206,17 @@ function Detail({
             patch({ title: "제목 없는 아이디어" });
         }}
       />
-      <section className="memo-section" aria-label="아이디어 본문">
+      <nav className="detail-tabs" aria-label="아이디어 작업 전환">
+        {[
+          { id: "body", label: "본문" },
+          { id: "improvements", label: "개선" },
+          { id: "versions", label: "버전" },
+          { id: "links", label: "링크" },
+        ].map((item) => (
+          <button key={item.id} type="button" aria-current={mode === item.id ? "page" : undefined} className={mode === item.id ? "active" : ""} onClick={() => setMode(item.id as typeof mode)}>{item.label}</button>
+        ))}
+      </nav>
+      <section className="memo-section" aria-label="아이디어 본문" hidden={mode !== "body"}>
         <Editor
           content={idea.content}
           onChange={(content, plain_text) => patch({ content, plain_text })}
@@ -1197,7 +1224,8 @@ function Detail({
           onZoom={onZoom}
         />
       </section>
-      <section className="detail-section">
+      {(mode === "improvements" || mode === "versions") && <IdeaWorkflow idea={idea} mode={mode} onChange={patch} />}
+      <section className="detail-section" hidden={mode !== "body"}>
         <div className="section-label">
           <Hash size={14} />
           태그
@@ -1272,20 +1300,17 @@ function Detail({
           )}
         </div>
       </section>
-      <section className="detail-section">
+      <section className="detail-section" hidden={mode !== "links"}>
         <div className="section-label">
           <ExternalLink size={14} />
-          관련 링크
-          <button
-            aria-label="관련 링크 추가"
-            onClick={() => {
-              setLink({ id: "", label: "", url: "", type: "website" });
-              setLinkOpen(true);
-            }}
-          >
-            <Plus size={15} />
-          </button>
+          <button className="link-heading-button" onClick={() => quickLinkRef.current?.focus()}>관련 링크</button>
         </div>
+        {mode === "links" && (
+          <form className="workflow-input" onSubmit={(e) => { e.preventDefault(); saveQuickLink(); }}>
+            <input autoFocus ref={quickLinkRef} aria-label="관련 링크 빠른 추가" placeholder="주소를 붙여넣으세요…" value={quickLink} onChange={(e) => setQuickLink(e.target.value)} />
+            <button className="primary" type="submit" disabled={!quickLink.trim()} aria-label="관련 링크 추가"><Plus size={16}/></button>
+          </form>
+        )}
         {idea.links.map((l) => (
           <div className="link-row" key={l.id}>
             {l.type === "github" ? (
@@ -1376,7 +1401,7 @@ function Detail({
         <span>만든 날 {date(idea.created_at)}</span>
         <span>수정 {date(idea.updated_at)}</span>
       </div>
-      <section className="detail-section">
+      <section className="detail-section" hidden={mode !== "body"}>
         <div className="section-label">
           <ImagePlus size={14} />
           참고 이미지 <small>{idea.images.length}/12</small>
