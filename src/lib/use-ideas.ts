@@ -509,8 +509,9 @@ export function useDriveIdeas() {
       }
       await persist();
       if (!demo) {
-        if (workerAuthEnabled) await logoutWorkerSession();
-        else forgetDriveUser();
+        if (workerAuthEnabled) {
+          try { await logoutWorkerSession(); } catch (error) { report(error); return; }
+        } else forgetDriveUser();
       }
       setUser(null);
       setDemo(false);
