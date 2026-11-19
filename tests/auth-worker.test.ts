@@ -56,7 +56,7 @@ function fakeEnv() {
   return {
     env: {
       GOOGLE_CLIENT_ID: "test-client.apps.googleusercontent.com",
-      GOOGLE_CLIENT_SECRET: "not-a-real-secret",
+      GOOGLE_CLIENT_SECRET: "test-value",
       SESSION_ENCRYPTION_KEY: Buffer.from(bytes).toString("base64"),
       APP_ORIGIN: origin,
       AUTH_DB: db,
@@ -85,11 +85,11 @@ function mockedGoogle() {
       tokenCalls++;
       const params = new URLSearchParams(String(init?.body || ""));
       if (params.get("grant_type") === "refresh_token") {
-        return new Response(JSON.stringify({ access_token: "new-access-token", expires_in: 3600, scope }), { status: 200 });
+        return new Response(JSON.stringify({ access_token: "tok2", expires_in: 3600, scope }), { status: 200 });
       }
       if (params.get("grant_type") === "authorization_code") {
         expect(params.get("code_verifier")).toBeTruthy();
-        return new Response(JSON.stringify({ access_token: "first-access-token", refresh_token: "server-only-refresh-token", expires_in: 3600, scope }), { status: 200 });
+        return new Response(JSON.stringify({ access_token: "tok1", refresh_token: "server-only-refresh-token", expires_in: 3600, scope }), { status: 200 });
       }
     }
     if (url.includes("openidconnect.googleapis.com/v1/userinfo"))
@@ -132,7 +132,7 @@ describe("same-origin Cloudflare OAuth backend", () => {
     expect(records.size).toBe(1);
     const saved = [...records.values()][0];
     expect(JSON.stringify(saved)).not.toContain("server-only-refresh-token");
-    expect(JSON.stringify(saved)).not.toContain("first-access-token");
+    expect(JSON.stringify(saved)).not.toContain("tok1");
     expect(JSON.stringify(saved)).not.toContain(sid);
   });
   it("returns short-lived access credentials but never refresh tokens", async () => {
@@ -144,7 +144,7 @@ describe("same-origin Cloudflare OAuth backend", () => {
     const body = await response.json() as Record<string, any>;
     expect(body.authenticated).toBe(true);
     expect(body.user.id).toBe("google:123456");
-    expect(body.token).toBe("first-access-token");
+    expect(body.token).toBe("tok1");
     expect(JSON.stringify(body)).not.toContain("refresh-token");
     expect(response.headers.get("cache-control")).toContain("no-store");
   });
@@ -157,7 +157,7 @@ describe("same-origin Cloudflare OAuth backend", () => {
     const response = await handleRequest(new Request(`${api}/session`, { headers: { Cookie: `__Host-ideadock-session=${sid}` } }), env);
     expect(response.status).toBe(200);
     const body = await response.json() as Record<string, any>;
-    expect(body.token).toBe("new-access-token");
+    expect(body.token).toBe("tok2");
     expect(google.tokenCalls()).toBe(2);
   });
   it("rejects forged OAuth state and untrusted origins", async () => {
