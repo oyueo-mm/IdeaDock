@@ -577,6 +577,22 @@ export default function Dock() {
                       ? "아이디어"
                       : nav.find((i) => i.id === filter)?.label}
                 </h1>
+              {filter !== "trash" && store.ready && folderStore.ready && (
+                <form className="quick-create" onSubmit={(e) => {
+                  e.preventDefault();
+                  const title = quickTitle.trim();
+                  if (!title) return;
+                  const created = store.create(title);
+                  if (!created) return;
+                  if (explorer.folderId) update({ ...created, folder_id: explorer.folderId });
+                  setFilter("all");
+                  setTag("");
+                  setQuickTitle("");
+                }}>
+                  <input aria-label="아이디어 빠른 추가" placeholder="떠오른 아이디어를 바로 적어보세요…" value={quickTitle} onChange={(e) => setQuickTitle(e.target.value)} maxLength={300} />
+                  <button className="primary" type="submit" disabled={!quickTitle.trim()}><Plus size={15} /> 추가</button>
+                </form>
+              )}
                 <label className="sort-field">
                   <ArrowDownUp size={14} />
                   <select
@@ -618,22 +634,6 @@ export default function Dock() {
                   )}
                 </div>
               </div>
-              {filter !== "trash" && store.ready && folderStore.ready && (
-                <form className="quick-create" onSubmit={(e) => {
-                  e.preventDefault();
-                  const title = quickTitle.trim();
-                  if (!title) return;
-                  const created = store.create(title);
-                  if (!created) return;
-                  if (explorer.folderId) update({ ...created, folder_id: explorer.folderId });
-                  setFilter("all");
-                  setTag("");
-                  setQuickTitle("");
-                }}>
-                  <input aria-label="아이디어 빠른 추가" placeholder="떠오른 아이디어를 바로 적어보세요…" value={quickTitle} onChange={(e) => setQuickTitle(e.target.value)} maxLength={300} />
-                  <button className="primary" type="submit" disabled={!quickTitle.trim()}><Plus size={15} /> 추가</button>
-                </form>
-              )}
             </div>
           )}
           {!authenticated && store.ready && (
