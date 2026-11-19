@@ -35,12 +35,14 @@ import {
   Idea,
   IdeaImage,
   IdeaLink,
-  validUrl,
+  normalizeIdeaUrl,
+  inferLinkType,
   validateImage,
   removeImageContent,
 } from "@/lib/model";
 import { supabase } from "@/lib/supabase";
 import Editor from "./editor";
+import IdeaWorkflow from "./idea-workflow";
 import { useFolders } from "@/lib/use-folders";
 import { folderTrashed } from "@/lib/folders";
 import {
@@ -98,7 +100,9 @@ export default function Dock() {
     [loaded, setLoaded] = useState(false),
     [mobileNav, setMobileNav] = useState(false),
     [settings, setSettings] = useState(false),
-    [theme, setTheme] = useState("system");
+    [theme, setTheme] = useState("system"),
+     [letterSpacing, setLetterSpacing] = useState("normal"),
+     [quickTitle, setQuickTitle] = useState("");
   const current = ideas.find((i) => i.id === selected),
     active = ideas.filter(
       (i) => !i.deleted_at && !folderTrashed(folderStore.folders, i.folder_id),
@@ -164,6 +168,7 @@ export default function Dock() {
           ),
         });
       setTheme(localStorage.getItem("ideadock:theme") || "system");
+       setLetterSpacing(localStorage.getItem("ideadock:letter-spacing") || "normal");
     } catch {}
     setLoaded(true);
   }, []);
@@ -187,6 +192,10 @@ export default function Dock() {
     media.addEventListener("change", apply);
     return () => media.removeEventListener("change", apply);
   }, [theme, loaded]);
+   useEffect(() => {
+     if (!loaded) return;
+     try { localStorage.setItem("ideadock:letter-spacing", letterSpacing); } catch {}
+   }, [letterSpacing, loaded]);
   useEffect(() => {
     const pop = () => {
       const id = new URLSearchParams(location.hash.slice(1)).get("idea");
@@ -370,6 +379,7 @@ export default function Dock() {
         {
           "--left-width": `${layout.leftWidth}px`,
           "--right-width": `${layout.rightWidth}px`,
+           "--user-letter-spacing": letterSpacing === "normal" ? "normal" : `${letterSpacing}px`,
         } as React.CSSProperties
       }
     >
@@ -608,6 +618,22 @@ export default function Dock() {
                   )}
                 </div>
               </div>
+              {filter !== "trash" && store.ready && folderStore.ready && (
+                <form className="quick-create" onSubmit={(e) => {
+                  e.preventDefault();
+                  const title = quickTitle.trim();
+                  if (!title) return;
+                  const created = store.create(title);
+                  if (!created) return;
+                  if (explorer.folderId) update({ ...created, folder_id: explorer.folderId });
+                  setFilter("all");
+                  setTag("");
+                  setQuickTitle("");
+                }}>
+                  <input aria-label="아이디어 빠른 추가" placeholder="떠오른 아이디어를 바로 적어보세요…" value={quickTitle} onChange={(e) => setQuickTitle(e.target.value)} maxLength={300} />
+                  <button className="primary" type="submit" disabled={!quickTitle.trim()}><Plus size={15} /> 추가</button>
+                </form>
+              )}
             </div>
           )}
           {!authenticated && store.ready && (
@@ -836,6 +862,16 @@ export default function Dock() {
                   <t.icon size={18} />
                   {t.label}
                 </button>
+              ))}
+            </div>
+            <p>글자 간격</p>
+            <div className="theme-options spacing-options">
+              {[
+                { id: "-0.3", label: "좁게" },
+                { id: "normal", label: "기본" },
+                { id: "0.5", label: "넓게" },
+              ].map((option) => (
+                <button key={option.id} className={letterSpacing === option.id ? "selected" : ""} onClick={() => setLetterSpacing(option.id)}>{option.label}</button>
               ))}
             </div>
             <p className="settings-account">
