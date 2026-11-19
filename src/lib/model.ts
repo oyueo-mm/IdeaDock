@@ -4,6 +4,33 @@ export type IdeaLink = {
   label: string;
   url: string;
 };
+export type IdeaImprovement = {
+  id: string;
+  text: string;
+  is_done: boolean;
+  created_at: string;
+  updated_at: string;
+  completed_at: string | null;
+  version_id?: string;
+};
+export type IdeaSnapshot = {
+  title: string;
+  content: Record<string, unknown>;
+  plain_text: string;
+  tags: string[];
+  links: IdeaLink[];
+  images: IdeaImage[];
+  improvements: IdeaImprovement[];
+  is_completed: boolean;
+  is_pinned: boolean;
+};
+export type IdeaCheckpoint = {
+  id: string;
+  label: string;
+  summary: string;
+  created_at: string;
+  snapshot: IdeaSnapshot;
+};
 export type IdeaImage = {
   id: string;
   storage_path: string;
@@ -13,6 +40,8 @@ export type Idea = {
   // Optional: never normalize old documents before checking their revision hash.
   folder_id?: string | null;
   imports?: { file_hash: string; item_id: string }[];
+  improvements?: IdeaImprovement[];
+  checkpoints?: IdeaCheckpoint[];
   id: string;
   user_id: string;
   title: string;
@@ -50,6 +79,24 @@ export function removeImageContent(
       )
       .map((child: Record<string, unknown>) => removeImageContent(child, id)),
   };
+}
+export function normalizeIdeaUrl(input: string): string | null {
+  const value = input.trim();
+  if (!value || /\s/.test(value) || value.startsWith("//")) return null;
+  const hasScheme = /^[a-z][a-z\d+.-]*:/i.test(value);
+  const candidate = hasScheme ? value : `https://${value}`;
+  try {
+    const url = new URL(candidate);
+    if (!["https:", "http:"].includes(url.protocol) || !url.hostname ||
+        url.username || url.password || !url.hostname.includes(".") &&
+        url.hostname !== "localhost") return null;
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+export function inferLinkType(url: string): IdeaLink["type"] {
+  return new URL(url).hostname.toLowerCase() === "github.com" ? "github" : "website";
 }
 export function validUrl(value: string) {
   try {
