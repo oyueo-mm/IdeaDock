@@ -15,7 +15,6 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: ideadock-auth-staging
-      url: ${{ secrets.APP_ORIGIN }}/IdeaDock/
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
