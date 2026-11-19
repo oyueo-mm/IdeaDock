@@ -1194,6 +1194,16 @@ function Detail({
           </button>
         </div>
       </div>
+      <nav className="detail-tabs" aria-label="아이디어 작업 전환">
+        {[
+          { id: "body", label: "본문" },
+          { id: "improvements", label: "개선" },
+          { id: "versions", label: "버전" },
+          { id: "links", label: "링크" },
+        ].map((item) => (
+          <button key={item.id} type="button" aria-current={mode === item.id ? "page" : undefined} className={mode === item.id ? "active" : ""} onClick={() => setMode(item.id as typeof mode)}>{item.label}</button>
+        ))}
+      </nav>
       <textarea
         ref={titleRef}
         className="detail-title"
@@ -1206,16 +1216,6 @@ function Detail({
             patch({ title: "제목 없는 아이디어" });
         }}
       />
-      <nav className="detail-tabs" aria-label="아이디어 작업 전환">
-        {[
-          { id: "body", label: "본문" },
-          { id: "improvements", label: "개선" },
-          { id: "versions", label: "버전" },
-          { id: "links", label: "링크" },
-        ].map((item) => (
-          <button key={item.id} type="button" aria-current={mode === item.id ? "page" : undefined} className={mode === item.id ? "active" : ""} onClick={() => setMode(item.id as typeof mode)}>{item.label}</button>
-        ))}
-      </nav>
       <section className="memo-section" aria-label="아이디어 본문" hidden={mode !== "body"}>
         <Editor
           content={idea.content}
@@ -1300,14 +1300,18 @@ function Detail({
           )}
         </div>
       </section>
-      <section className="detail-section" hidden={mode !== "links"}>
+      <section className="detail-section" hidden={mode !== "body" && mode !== "links"}>
         <div className="section-label">
           <ExternalLink size={14} />
           <button className="link-heading-button" onClick={() => quickLinkRef.current?.focus()}>관련 링크</button>
+          <button aria-label="관련 링크 추가" onClick={() => {
+            setLink({ id: "", label: "", url: "", type: "website" });
+            setLinkOpen(true);
+          }}><Plus size={15}/></button>
         </div>
-        {mode === "links" && (
+        {(mode === "body" || mode === "links") && (
           <form className="workflow-input" onSubmit={(e) => { e.preventDefault(); saveQuickLink(); }}>
-            <input autoFocus ref={quickLinkRef} aria-label="관련 링크 빠른 추가" placeholder="주소를 붙여넣으세요…" value={quickLink} onChange={(e) => setQuickLink(e.target.value)} />
+            <input autoFocus={mode === "links"} ref={quickLinkRef} aria-label="관련 링크 빠른 추가" placeholder="주소를 붙여넣으세요…" value={quickLink} onChange={(e) => setQuickLink(e.target.value)} />
             <button className="primary" type="submit" disabled={!quickLink.trim()} aria-label="관련 링크 추가"><Plus size={16}/></button>
           </form>
         )}
