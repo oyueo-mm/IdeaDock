@@ -23,6 +23,9 @@ import {
   driveCacheKey,
   rememberDriveUser,
   rememberedDriveUser,
+  workerAuthEnabled,
+  restoreWorkerSession,
+  logoutWorkerSession,
   Revision,
   subscribeDriveSession,
 } from "./drive";
@@ -226,15 +229,30 @@ export function useDriveIdeas() {
     }
   }, [persist, publish, report]);
   useEffect(() => {
-    if (driveConfigured) void loadGoogle().catch(report);
+    if (driveConfigured && !workerAuthEnabled) void loadGoogle().catch(report);
   }, [report]);
   useEffect(() => {
-    // Reopen the last workspace from its device cache; Drive reconnects on
-    // demand. Runs after hydration because storage is browser-only.
+    if (workerAuthEnabled) {
+      // Do not show an old account's cached documents before cookie identity is verified.
+      void restoreWorkerSession().then((verified) => {
+        if (verified) setUser(verified);
+        setRestored(true);
+      }).catch((error) => {
+        // On a genuine network outage cached drafts remain available for offline work.
+        if (!navigator.onLine) {
+          const remembered = rememberedDriveUser();
+          if (remembered) setUser(remembered);
+        }
+        report(error);
+        setRestored(true);
+      });
+      return;
+    }
+    // Legacy Pages mode: open the last cached workspace without reauthorizing.
     const remembered = rememberedDriveUser();
     if (remembered) setUser((prev) => prev ?? remembered);
     setRestored(true);
-  }, []);
+  }, [report]);
   useEffect(() => {
     if (user) rememberDriveUser(user);
   }, [user]);
@@ -321,7 +339,10 @@ export function useDriveIdeas() {
     // A hidden tab neither polls nor competes with the visible one; it catches
     // up as soon as it is shown again.
     const run = () => {
-      if (!document.hidden) void sync().catch(report);
+      if (document.hidden) return;
+      if (workerAuthEnabled && !linked.current)
+        void restoreWorkerSession().then(() => sync()).catch(report);
+      else void sync().catch(report);
     };
     const interval = setInterval(run, 15000);
     const leave = (event: BeforeUnloadEvent) => {
@@ -487,7 +508,10 @@ export function useDriveIdeas() {
         return;
       }
       await persist();
-      if (!demo) forgetDriveUser();
+      if (!demo) {
+        if (workerAuthEnabled) await logoutWorkerSession();
+        else forgetDriveUser();
+      }
       setUser(null);
       setDemo(false);
     },
