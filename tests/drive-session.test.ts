@@ -19,6 +19,7 @@ beforeEach(() => {
   profile = { sub: "alice", email: "alice@example.com", name: "Alice" };
   driveStatus = 200;
   expiresIn = 3600;
+  vi.stubEnv("NEXT_PUBLIC_AUTH_MODE", "browser");
   vi.stubEnv("NEXT_PUBLIC_GOOGLE_CLIENT_ID", "test.apps.googleusercontent.com");
   window.google = {
     accounts: {
