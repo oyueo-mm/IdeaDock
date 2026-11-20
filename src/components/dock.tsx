@@ -65,9 +65,9 @@ type Layout = {
 };
 const defaultLayout: Layout = {
   left: true,
-  right: true,
-  leftWidth: 290,
-  rightWidth: 420,
+  right: false,
+  leftWidth: 252,
+  rightWidth: 460,
 };
 const nav = [
   { id: "all", label: "전체 아이디어", icon: Inbox },
@@ -159,8 +159,8 @@ export default function Dock() {
           ...defaultLayout,
           ...saved,
           leftWidth: Math.min(
-            320,
-            Math.max(180, Number(saved.leftWidth) || defaultLayout.leftWidth),
+            280,
+            Math.max(200, Number(saved.leftWidth) || defaultLayout.leftWidth),
           ),
           rightWidth: Math.min(
             680,
@@ -372,9 +372,11 @@ export default function Dock() {
     !!store.user &&
     !store.demo &&
     !store.connected;
+  const hasDetailSelection = !!current || explorer.selected.size > 0;
+  const showDetail = hasDetailSelection && layout.right;
   return (
     <div
-      className="app-shell"
+      className={`app-shell${showDetail ? " detail-open" : ""}`}
       style={
         {
           "--left-width": `${layout.leftWidth}px`,
@@ -458,7 +460,8 @@ export default function Dock() {
             </button>
           ))}
         </nav>
-        {authenticated && (
+        {authenticated && <FolderTree e={explorer} />}
+        {authenticated && tags.length > 0 && (
           <>
             <div className="nav-caption tags-heading">
               태그 <Hash size={13} />
@@ -489,7 +492,6 @@ export default function Dock() {
             </div>
           </>
         )}
-        {authenticated && <FolderTree e={explorer} />}
         <div className="sidebar-bottom">
           <MigrationPanel
             account={store.backend === "drive" ? store.user?.id : undefined}
@@ -549,21 +551,22 @@ export default function Dock() {
             >
               <Menu size={18} />
             </button>
+            <span className="topbar-path">{explorer.folderId ? folderStore.folders.find((folder) => folder.id === explorer.folderId)?.name ?? "폴더" : tag ? `#${tag}` : filter === "all" ? "전체 아이디어" : nav.find((item) => item.id === filter)?.label}</span>
           </div>
           <div className="topbar-actions">
-            <button
+            {hasDetailSelection && <button
               className="icon-button"
               aria-label="오른쪽 패널 열기 또는 접기"
               onClick={() =>
                 setLayout((prev) => ({ ...prev, right: !prev.right }))
               }
             >
-              {layout.right ? (
+              {showDetail ? (
                 <PanelRightClose size={17} />
               ) : (
                 <PanelRightOpen size={17} />
               )}
-            </button>
+            </button>}
           </div>
         </header>
         <div className="main-content">
@@ -577,6 +580,20 @@ export default function Dock() {
                       ? "아이디어"
                       : nav.find((i) => i.id === filter)?.label}
                 </h1>
+                <label className="sort-field">
+                  <ArrowDownUp size={14} />
+                  <select
+                    aria-label="아이디어 정렬"
+                    value={sort}
+                    onChange={(e) => setSort(e.target.value)}
+                  >
+                    <option value="updated">최근 수정순</option>
+                    <option value="created">최근 생성순</option>
+                    <option value="oldest">오래된순</option>
+                    <option value="title">제목순</option>
+                  </select>
+                </label>
+              </div>
               {filter !== "trash" && store.ready && folderStore.ready && (
                 <form className="quick-create" onSubmit={(e) => {
                   e.preventDefault();
@@ -593,20 +610,6 @@ export default function Dock() {
                   <button className="primary" type="submit" disabled={!quickTitle.trim()}><Plus size={15} /> 추가</button>
                 </form>
               )}
-                <label className="sort-field">
-                  <ArrowDownUp size={14} />
-                  <select
-                    aria-label="아이디어 정렬"
-                    value={sort}
-                    onChange={(e) => setSort(e.target.value)}
-                  >
-                    <option value="updated">최근 수정순</option>
-                    <option value="created">최근 생성순</option>
-                    <option value="oldest">오래된순</option>
-                    <option value="title">제목순</option>
-                  </select>
-                </label>
-              </div>
               <div className="list-path-row">
                 <ExplorerBreadcrumb e={explorer} />
                 <div className="explorer-toolbar">
@@ -774,8 +777,8 @@ export default function Dock() {
           )}
         </div>
       </main>
-      {layout.right && separator("right")}
-      {layout.right && (
+      {showDetail && separator("right")}
+      {showDetail && (
         <aside
           className={`detail-panel ${current || explorer.selected.size ? "has-selection" : ""}`}
           aria-label="아이디어 상세"
