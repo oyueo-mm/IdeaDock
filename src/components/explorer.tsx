@@ -105,7 +105,8 @@ export function useExplorer({
     suppress = useRef(false),
     hover = useRef<ReturnType<typeof setTimeout> | undefined>(undefined),
     dragRef = useRef<string[]>([]),
-    hoverId = useRef<string | null | undefined>(undefined);
+    hoverId = useRef<string | null | undefined>(undefined),
+    folderSelectionTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => {
     setSelected(new Set());
     setMobileMulti(false);
@@ -131,6 +132,7 @@ export function useExplorer({
     () => () => {
       clearTimeout(longPress.current);
       clearTimeout(hover.current);
+      clearTimeout(folderSelectionTimer.current);
     },
     [],
   );
@@ -249,6 +251,7 @@ export function useExplorer({
   const selectedFolders = folders.filter((f) => selected.has(fid(f.id))),
     selectedIdeas = ideas.filter((i) => selected.has(iid(i.id)));
   function clear() {
+    clearTimeout(folderSelectionTimer.current);
     setSelected(new Set());
     setMobileMulti(false);
     setContext(null);
@@ -264,12 +267,20 @@ export function useExplorer({
     clear();
   }
   function announce(next: Set<string>, forceBulk = false) {
+    clearTimeout(folderSelectionTimer.current);
     setSelected(next);
     if (next.size === 1 && !forceBulk) {
       const id = [...next][0];
       const idea = ideas.find((i) => iid(i.id) === id);
       if (idea) {
         onOpen(idea);
+        return;
+      }
+      if (id.startsWith("f:")) {
+        // Keep double-click folder navigation stable: opening the editor on
+        // the first click would resize the list before the second click.
+        onClear();
+        folderSelectionTimer.current = setTimeout(onSelection, 260);
         return;
       }
     }
