@@ -69,18 +69,17 @@ const lines = (page: Page, title: string) =>
     );
   });
 
-test("summaries show up to two lines and the list hides dates", async ({
+test("summaries are compact and the list hides dates", async ({
   page,
 }) => {
   await open(page);
   await expect(page.locator("article.idea-row")).toHaveCount(6);
 
-  expect(await lines(page, "본문 없는 아이디어")).toBe(1);
-  await expect(preview(page, "본문 없는 아이디어")).toHaveText("본문 없음");
+  await expect(preview(page, "본문 없는 아이디어")).toHaveCount(0);
   expect(await lines(page, "짧은 아이디어")).toBe(1);
   for (const title of ["긴 아이디어", "혼합 아이디어", "태그 이미지 아이디어"])
-    expect(await lines(page, title), title).toBe(2);
-  expect(await lines(page, "링크 아이디어")).toBeLessThanOrEqual(2);
+    expect(await lines(page, title), title).toBe(1);
+  expect(await lines(page, "링크 아이디어")).toBe(1);
 
   // Long text is clipped, not pushed out of the row or the list.
   const clipped = await preview(page, "긴 아이디어").evaluate(
@@ -98,10 +97,12 @@ test("summaries show up to two lines and the list hides dates", async ({
     expect(p!.x + p!.width).toBeLessThanOrEqual(r!.x + r!.width + 1);
   }
 
-  // A one-line row is shorter than a two-line one.
+  // Empty summaries are quieter and take less space than populated rows.
+  const empty = (await row(page, "본문 없는 아이디어").boundingBox())!.height;
   const short = (await row(page, "짧은 아이디어").boundingBox())!.height;
   const long = (await row(page, "긴 아이디어").boundingBox())!.height;
-  expect(long).toBeGreaterThan(short);
+  expect(short).toBeGreaterThan(empty);
+  expect(Math.abs(long - short)).toBeLessThan(6);
 
   // No dates or provenance label; tags, badge, image and link stay.
   const rich = row(page, "태그 이미지 아이디어");
@@ -111,7 +112,8 @@ test("summaries show up to two lines and the list hides dates", async ({
   await expect(page.locator(".explorer-items")).not.toContainText(
     /\d+월 \d+일/,
   );
-  await expect(rich.locator(".completed-label")).toHaveText("완료");
+  await expect(rich.locator(".completion-check")).toBeChecked();
+  await expect(rich.locator(".completed-label")).toHaveCount(0);
   await expect(rich.locator(".tag-chip")).toHaveText(["디자인", "읽기"]);
   await expect(rich.locator(".idea-thumbnail")).toBeVisible();
   await expect(
@@ -135,13 +137,13 @@ test("summaries show up to two lines and the list hides dates", async ({
   expect(saved.created_at).toBeTruthy();
 });
 
-test("two-line rows still select, complete and keep the list scrollable", async ({
+test("compact rows still select, complete and keep the list scrollable", async ({
   page,
 }) => {
   await open(page);
   const long = row(page, "긴 아이디어");
   await long.getByRole("checkbox", { name: "긴 아이디어 완료" }).check();
-  await expect(long.locator(".completed-label")).toBeVisible();
+  await expect(long.locator(".completed-label")).toHaveCount(0);
   await long.locator("button.idea-summary").click();
   await expect(
     page.getByRole("textbox", { name: "아이디어 제목 편집" }),
