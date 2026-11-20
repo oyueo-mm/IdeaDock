@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DriveRepository } from "../src/lib/drive";
 import { FolderRepository } from "../src/lib/folder-repository";
 import { makeFolder } from "../src/lib/folders";
-import { canonical } from "../src/lib/integrity";
+import { canonical, digest, parseCanonicalRevision } from "../src/lib/integrity";
 import { makeIdea } from "../src/lib/model";
 import { mapLimit, READ_CONCURRENCY } from "../src/lib/revision-loader";
 import { MemoryDb, MemoryRemote } from "./support/memory";
@@ -231,5 +231,56 @@ describe("revision loading", () => {
     await expect(new FolderRepository(t.repo()).list()).rejects.toThrow(
       "체크섬",
     );
+  });
+});
+
+describe("historical malformed canonical JSON", () => {
+  it("serializes undefined optional object properties as valid JSON", () => {
+    const text = canonical({ z: [undefined, 3], a: { key: undefined, keep: true } });
+    expect(JSON.parse(text)).toEqual({ a: { keep: true }, z: [null, 3] });
+    expect(text).not.toContain("undefined");
+  });
+
+  it("repairs only unquoted bare undefined, preserving literal text and array semantics", () => {
+    const raw = '{"notes":"literal \\"version_id\\":undefined","improvements":[{"version_id":undefined,"text":"fine"}],"array":[undefined,1]}';
+    const parsed = parseCanonicalRevision(raw);
+    expect(parsed.legacy).toBe(true);
+    expect(parsed.value).toEqual({ notes: 'literal "version_id":undefined', improvements: [{ text: "fine" }], array: [null, 1] });
+    expect(parseCanonicalRevision('{"notes":"undefined"}')).toEqual({ value: { notes: "undefined" }, legacy: false });
+    expect(() => parseCanonicalRevision('{"notes":NaN}')).toThrow();
+  });
+
+  it("recovers a hash-verified legacy Drive revision without rewriting its source", async () => {
+    const t = setup();
+    const idea = makeIdea("recovery fixture", "alice");
+    const revision = { schema: 1, parent: null, idea: {
+      ...idea,
+      improvements: [{ id: "note", text: "test", is_done: false, created_at: idea.created_at,
+        updated_at: idea.updated_at, completed_at: null, version_id: undefined }],
+    } };
+    // Replicate the old serializer bug. The original Drive hash was computed
+    // from these invalid bytes and must remain the revision's identity.
+    const valid = canonical(revision);
+    const malformed = valid.replace('"version_id":null', '"version_id":undefined')
+      .replace('"updated_at":', '"version_id":undefined,"updated_at":');
+    expect(() => JSON.parse(malformed)).toThrow();
+    const blob = new Blob([malformed]);
+    const hash = await digest(blob);
+    t.remote.files.set("legacy", { id: "legacy", appProperties: { key: hash, kind: "revision" }, blob });
+    const first = await t.repo().list();
+    expect(first).toHaveLength(1);
+    expect(first[0].idea.title).toBe("recovery fixture");
+    expect(first[0].idea.improvements?.[0]).not.toHaveProperty("version_id");
+    t.reset();
+    expect(await t.repo().list()).toHaveLength(1);
+    expect(t.calls.reads).toBe(0);
+    expect(await (await t.remote.read("legacy")).text()).toBe(malformed);
+  });
+
+  it("refuses corrupted bytes despite the compatibility parser", async () => {
+    const t = setup();
+    const blob = new Blob(['{"schema":1,"parent":null,"version_id":undefined}']);
+    t.remote.files.set("bad", { id: "bad", appProperties: { key: "0".repeat(64), kind: "revision" }, blob });
+    await expect(t.repo().list()).rejects.toThrow("무결성");
   });
 });

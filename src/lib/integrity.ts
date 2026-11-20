@@ -1,16 +1,56 @@
 import { Idea, validUrl } from "./model";
 
+/** Stable JSON, with undefined handled according to JSON.stringify semantics. */
 export function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value && typeof value === "object")
-    return `{${Object.keys(value)
-      .sort()
-      .map(
-        (key) =>
-          `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`,
-      )
-      .join(",")}}`;
+  if (Array.isArray(value)) return "[" + value.map((item) => item === undefined ? "null" : canonical(item)).join(",") + "]";
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return "{" + Object.keys(record).filter((key) => record[key] !== undefined).sort().map((key) => JSON.stringify(key) + ":" + canonical(record[key])).join(",") + "}";
+  }
   return JSON.stringify(value);
+}
+
+/** Decode historic immutable revisions containing bare undefined values.
+ * The original Drive bytes are hash-verified BEFORE this compatibility parse.
+ * Only the known legacy token is repaired; unrelated JSON errors still fail.
+ */
+export function parseCanonicalRevision(text: string): { value: unknown; legacy: boolean } {
+  try {
+    return { value: JSON.parse(text), legacy: false };
+  } catch (originalError) {
+    const marker = "__ideadock_legacy_undefined_" + crypto.randomUUID() + "__";
+    let quoted = false;
+    let escaped = false;
+    let changed = false;
+    let fixed = "";
+    for (let i = 0; i < text.length; i++) {
+      const char = text[i];
+      if (quoted) {
+        fixed += char;
+        if (escaped) escaped = false;
+        else if (char === "\\") escaped = true;
+        else if (char === '"') quoted = false;
+        continue;
+      }
+      if (char === '"') { quoted = true; fixed += char; continue; }
+      const before = text[i - 1];
+      const after = text[i + 9];
+      if (text.startsWith("undefined", i) &&
+          (before === ":" || before === "," || before === "[") &&
+          (after === "," || after === "}" || after === "]")) {
+        fixed += JSON.stringify(marker);
+        i += 8;
+        changed = true;
+      } else fixed += char;
+    }
+    if (!changed) throw originalError;
+    return {
+      value: JSON.parse(fixed, function (_key, value) {
+        return value === marker ? (Array.isArray(this) ? null : undefined) : value;
+      }),
+      legacy: true,
+    };
+  }
 }
 export async function digest(value: Blob | string): Promise<string> {
   const bytes =

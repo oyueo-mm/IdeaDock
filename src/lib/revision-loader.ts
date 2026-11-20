@@ -1,4 +1,4 @@
-import { canonical, digest } from "./integrity";
+import { canonical, digest, parseCanonicalRevision } from "./integrity";
 import type { ImmutableRemote, RemoteFile } from "./drive";
 import type { KeyValueStore } from "./local-db";
 
@@ -73,7 +73,7 @@ export class RevisionLoader<R> {
         );
       const blob = await this.options.remote.read(file.id);
       if ((await digest(blob)) !== hash) throw new Error(this.options.corrupt);
-      verified.set(hash, this.options.check(JSON.parse(await blob.text())));
+      verified.set(hash, this.options.check(parseCanonicalRevision(await blob.text()).value));
     });
     return verified;
   }
@@ -107,13 +107,24 @@ export class RevisionLoader<R> {
     const cached = force ? undefined : await this.options.db.get<R>(cacheKey);
     let revision: R;
     let fetched = false;
-    if (cached && (await digest(canonical(cached))) === hash)
+    if (cached && (await digest(canonical(cached))) === hash) {
       revision = this.options.check(cached);
-    else {
-      const blob = await this.options.remote.read(file.id);
-      if ((await digest(blob)) !== hash) throw new Error(this.options.corrupt);
-      revision = this.options.check(JSON.parse(await blob.text()));
-      fetched = true;
+    } else {
+      const legacyKey = cacheKey + ":legacy-source";
+      const savedSource = force ? undefined : await this.options.db.get<string>(legacyKey);
+      if (savedSource && (await digest(savedSource)) === hash) {
+        revision = this.options.check(parseCanonicalRevision(savedSource).value);
+      } else {
+        const blob = await this.options.remote.read(file.id);
+        if ((await digest(blob)) !== hash) throw new Error(this.options.corrupt);
+        const source = await blob.text();
+        const parsed = parseCanonicalRevision(source);
+        revision = this.options.check(parsed.value);
+        // Preserve hash-verifiable original bytes so a new page load never
+        // downloads an unparseable historical revision over and over.
+        if (parsed.legacy) await this.options.db.set(legacyKey, source);
+        fetched = true;
+      }
     }
     if (fetched || force) await this.options.db.set(cacheKey, revision);
     this.verified.set(hash, revision);
