@@ -249,6 +249,7 @@ export default function Dock() {
   }
   function clearDetail() {
     setSelected(null);
+    setLayout((prev) => prev.right ? { ...prev, right: false } : prev);
     history.replaceState(null, "", location.pathname);
   }
   function close() {
