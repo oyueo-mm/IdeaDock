@@ -2474,3 +2474,57 @@ input[type="radio"] {
   .detail-panel { animation: none; }
 }
 
+
+
+/* A transient bulk-action bar avoids reflowing the entire list during marquee selection. */
+.mobile-selection-actions {
+  display: block;
+  flex: 0 0 auto;
+  max-height: 148px;
+  overflow: auto;
+  padding: 6px 0 7px;
+  border-top: 1px solid var(--line);
+}
+.mobile-selection-actions .explorer-actions {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  overflow: visible;
+}
+.mobile-selection-actions .explorer-actions h2 {
+  margin: 0 5px 0 0;
+  font-size: 12px;
+  font-weight: 650;
+}
+.mobile-selection-actions .explorer-actions > button {
+  padding: 6px 9px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+.mobile-selection-actions .explorer-actions select {
+  width: auto;
+  max-width: 220px;
+  font-size: 11px;
+}
+.app-shell.detail-open .mobile-selection-actions {
+  display: none;
+}
+@media (max-width: 640px) {
+  .mobile-selection-actions,
+  .app-shell.detail-open .mobile-selection-actions {
+    display: block;
+    max-height: 210px;
+  }
+  .mobile-selection-actions .explorer-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 10px 0;
+  }
+  .mobile-selection-actions .explorer-actions h2,
+  .mobile-selection-actions .explorer-actions select {
+    grid-column: 1 / -1;
+  }
+}
