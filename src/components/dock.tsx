@@ -373,7 +373,10 @@ export default function Dock() {
     !!store.user &&
     !store.demo &&
     !store.connected;
-  const hasDetailSelection = !!current || explorer.selected.size > 0;
+  const bulkSelection = explorer.selected.size > 1 ||
+    (explorer.mobileMulti && explorer.selected.size > 0);
+  const hasDetailSelection = !!current ||
+    (!bulkSelection && explorer.selected.size === 1 && explorer.selectedFolders.length === 1);
   const showDetail = hasDetailSelection && layout.right;
   return (
     <div
