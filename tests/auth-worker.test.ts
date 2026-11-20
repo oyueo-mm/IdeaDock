@@ -120,9 +120,9 @@ async function login(env: ReturnType<typeof fakeEnv>["env"]) {
 }
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 describe("same-origin Cloudflare OAuth backend", () => {
-  it("disables Cloudflare automatic HTML redirects for rewritten assets", () => {
+  it("mounts Cloudflare assets at the public /IdeaDock base path", () => {
     const config = readFileSync(new URL("../wrangler.example.toml", import.meta.url), "utf8");
-    expect(config).toMatch(/\[assets\][\s\S]*?html_handling\s*=\s*"none"/);
+    expect(config).toMatch(/\[assets\][\s\S]*?base_path\s*=\s*"\/IdeaDock"/);
   });
   it("redirects Google through PKCE/state and keeps refresh tokens encrypted", async () => {
     const { env, records } = fakeEnv();
@@ -198,8 +198,8 @@ describe("same-origin Cloudflare OAuth backend", () => {
     const { env, lastAsset } = fakeEnv();
     const asset = await handleRequest(new Request(`${origin}/IdeaDock/_next/static/example.js`), env);
     expect(asset.status).toBe(200);
-    expect(lastAsset()).toBe("/_next/static/example.js");
+    expect(lastAsset()).toBe("/IdeaDock/_next/static/example.js");
     await handleRequest(new Request(`${origin}/IdeaDock/`), env);
-    expect(lastAsset()).toBe("/index.html");
+    expect(lastAsset()).toBe("/IdeaDock/");
   });
 });

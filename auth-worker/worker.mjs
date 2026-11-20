@@ -220,10 +220,10 @@ async function asset(request, env) {
   if (url.pathname === "/" || url.pathname === BASE) return redirect(`${url.origin}${BASE}/`);
   if (!url.pathname.startsWith(`${BASE}/`) || !["GET", "HEAD"].includes(request.method))
     return new Response("Not found", { status: 404 });
-  // Next.js exports out/index.html and out/_next, while its links use /IdeaDock/*.
-  url.pathname = url.pathname.slice(BASE.length) || "/";
-  if (url.pathname === "/") url.pathname = "/index.html";
-  return env.ASSETS.fetch(new Request(url.toString(), request));
+  // Cloudflare assets.base_path maps /IdeaDock/* to the static export directory.
+  // Forward the original request so the Assets binding handles index.html and
+  // canonical paths itself, without a conflicting second URL rewrite.
+  return env.ASSETS.fetch(request);
 }
 export async function handleRequest(request, env) {
   const url = new URL(request.url);
