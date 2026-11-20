@@ -2425,7 +2425,6 @@ input[type="radio"] {
 @media (hover: hover) and (pointer: fine) {
   .explorer-list .idea-row .row-actions {
     opacity: 0;
-    pointer-events: none;
   }
   .explorer-list .idea-row:hover .row-actions,
   .explorer-list .idea-row:focus-within .row-actions {
@@ -2438,6 +2437,10 @@ input[type="radio"] {
   .explorer-list .idea-row .pin-action {
     opacity: 1;
     pointer-events: auto;
+  }
+  .explorer-list .idea-row .row-actions .icon-button {
+    min-width: 36px;
+    min-height: 36px;
   }
 }
 .detail-panel {
