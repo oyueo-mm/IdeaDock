@@ -74,5 +74,8 @@ jobs:
             const body = await result.json().catch(() => null);
             if (result.status !== 401 || body?.authenticated !== false) throw Error("Staging OAuth API did not return the expected unauthenticated state");
             console.log("PASS: staging auth endpoint answers securely (401 without a session)");
+            const home = await fetch(process.env.APP_ORIGIN.replace(/\/$/, "") + "/IdeaDock/", { redirect: "manual" });
+            if (home.status !== 200 || !(home.headers.get("content-type") || "").includes("text/html") || !(await home.text()).toLowerCase().includes("<html")) throw Error("Staging home did not return HTML 200 without redirect");
+            console.log("PASS: staging home page returns HTML 200 without redirects");
           })().catch((error) => { console.error(error.message); process.exitCode = 1; });
           NODE
