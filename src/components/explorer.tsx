@@ -1257,26 +1257,25 @@ export function ExplorerList({
             >
               <span className="idea-title">
                 {idea.is_pinned && <Pin size={12} />} {idea.title}
-                {e.lingering.has(idea.id) ? (
+                {e.lingering.has(idea.id) && (
                   <small className="completed-label">
                     {idea.is_completed ? "완료로 이동됨" : "미완료로 이동됨"}
                   </small>
-                ) : (
-                  idea.is_completed && (
-                    <small className="completed-label">완료</small>
-                  )
                 )}
               </span>
-              <span className="idea-preview">
-                {idea.plain_text || "본문 없음"}
-              </span>
+              {idea.plain_text.trim() && (
+                <span className="idea-preview">{idea.plain_text}</span>
+              )}
               {(idea.tags.length > 0 || idea.images.length > 0) && (
                 <span className="idea-meta">
-                  {idea.tags.map((t, index) => (
+                  {idea.tags.slice(0, 2).map((t, index) => (
                     <span key={t} className={`tag-chip color-${index % 5}`}>
                       {t}
                     </span>
                   ))}
+                  {idea.tags.length > 2 && (
+                    <span className="tag-overflow" title={idea.tags.slice(2).join(", ")}>+{idea.tags.length - 2}</span>
+                  )}
                   {idea.images.length > 0 && (
                     <span>이미지 {idea.images.length}</span>
                   )}
