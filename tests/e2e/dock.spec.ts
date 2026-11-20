@@ -308,7 +308,7 @@ test("image paste/upload, enlargement and deletion", async ({ page }) => {
   await expect(thumbnail).toHaveCount(0);
 });
 
-test("details appear only for selection, quick capture stays in the list", async ({ page }) => {
+test("details appear only for selection, quick capture stays in the list", async ({ page }, testInfo) => {
   const details = page.getByRole("complementary", { name: "아이디어 상세" });
   const toggle = page.getByRole("button", { name: "오른쪽 패널 열기 또는 접기" });
   await expect(details).toHaveCount(0);
@@ -326,8 +326,13 @@ test("details appear only for selection, quick capture stays in the list", async
   await expect(details).toHaveCount(0);
   await row.locator(".idea-summary").click();
   await expect(details).toBeVisible();
-  await toggle.click();
-  await expect(details).toHaveCount(0);
-  await toggle.click();
-  await expect(details).toBeVisible();
+  if (testInfo.project.name === "mobile") {
+    await page.getByRole("button", { name: "상세 패널 닫기" }).click();
+    await expect(details).toHaveCount(0);
+  } else {
+    await toggle.click();
+    await expect(details).toHaveCount(0);
+    await toggle.click();
+    await expect(details).toBeVisible();
+  }
 });
