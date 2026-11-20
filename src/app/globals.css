@@ -2176,3 +2176,355 @@ input[type="radio"] {
   .list-title-row .sort-field { order: 2; }
   .list-title-row h1 { order: 1; }
 }
+
+
+/* IdeaDock quiet workspace refresh: content-first list, contextual editor. */
+.app-shell {
+  font-family: "Pretendard", -apple-system, BlinkMacSystemFont, "Segoe UI", "Malgun Gothic", sans-serif;
+}
+.sidebar {
+  max-width: 280px;
+  padding: 20px 12px 0;
+}
+.sidebar .brand {
+  font-size: 21px;
+  font-weight: 740;
+  padding: 0 9px;
+}
+.sidebar .new-idea {
+  margin: 22px 3px 22px;
+  min-height: 40px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 650;
+}
+.sidebar .nav-caption {
+  padding: 0 10px 7px;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+}
+.sidebar .nav-item {
+  padding: 9px 10px;
+  gap: 10px;
+  border-radius: 7px;
+  font-size: 12px;
+}
+.sidebar .nav-item small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.sidebar .nav-item.selected small {
+  color: var(--primary);
+}
+.folder-tree {
+  margin: 14px 0 4px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.folder-tree-heading {
+  padding: 0 9px 6px;
+  font-size: 10px;
+}
+.folder-tree-name {
+  padding: 7px 5px;
+  border-radius: 6px;
+}
+.tags-heading {
+  margin-top: 18px;
+  padding-top: 12px !important;
+  border-top: 1px solid var(--line);
+}
+.sidebar-bottom {
+  padding-top: 12px;
+}
+.sidebar .account {
+  padding: 13px 10px;
+  border-radius: 7px;
+}
+.topbar {
+  padding: 0 28px;
+}
+.topbar .breadcrumb {
+  min-width: 0;
+  gap: 10px;
+}
+.topbar-path {
+  display: inline-block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted);
+}
+.topbar-actions {
+  gap: 5px;
+}
+.main-panel {
+  min-width: 0;
+}
+.main-content {
+  --pad: clamp(20px, 3vw, 40px);
+  width: min(100%, 1120px);
+  margin: 0 auto;
+  padding: 19px var(--pad) 0;
+}
+.app-shell.detail-open .main-content {
+  --pad: clamp(18px, 2vw, 30px);
+  max-width: 100%;
+}
+.list-header {
+  gap: 9px;
+  margin-bottom: 8px;
+}
+.list-title-row {
+  flex-wrap: nowrap;
+  min-height: 35px;
+  gap: 16px;
+}
+.list-title-row h1 {
+  font-size: 27px;
+  font-weight: 700;
+  letter-spacing: -0.035em;
+}
+.list-title-row .sort-field {
+  order: initial;
+  font-size: 11px;
+}
+.list-title-row .sort-field select {
+  max-width: 120px;
+  cursor: pointer;
+  color: var(--muted);
+}
+.list-header > .quick-create {
+  display: flex;
+  gap: 5px;
+  margin: 2px 0 5px;
+  padding: 4px;
+  background: var(--sidebar);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.list-header > .quick-create:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 12%, transparent);
+}
+.list-header > .quick-create input {
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  padding: 9px 11px;
+  background: transparent;
+  border: 0;
+  font-size: 13px;
+}
+.list-header > .quick-create input:focus-visible {
+  outline: none;
+}
+.list-header > .quick-create .primary {
+  padding: 8px 13px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.list-header > .quick-create .primary:disabled {
+  background: var(--soft);
+  color: var(--muted);
+  opacity: 1;
+}
+.list-path-row {
+  padding-bottom: 9px;
+  border-bottom: 1px solid var(--line);
+}
+.list-path-row .explorer-breadcrumb {
+  color: var(--muted);
+  font-size: 11px;
+}
+.list-path-row .explorer-toolbar button {
+  border-color: transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  padding: 6px 8px;
+  font-size: 11px;
+}
+.list-path-row .explorer-toolbar button:hover,
+.list-path-row .explorer-toolbar button[aria-pressed="true"] {
+  background: var(--soft);
+  color: var(--text);
+}
+.explorer-list .idea-row {
+  align-items: center;
+  padding: 13px 10px;
+  gap: 12px;
+  transition: background-color 130ms ease;
+}
+.explorer-list .idea-row:hover {
+  background: var(--hover);
+}
+.explorer-list .idea-row.is-selected {
+  background: var(--selected);
+  box-shadow: inset 2px 0 0 var(--primary);
+}
+.idea-row .completion-check {
+  width: 17px;
+  height: 17px;
+  margin: 0;
+}
+.idea-row .completion-check:checked::after {
+  line-height: 15px;
+}
+.idea-row .idea-title {
+  font-size: 14px;
+  font-weight: 630;
+  line-height: 1.4;
+  gap: 7px;
+}
+.idea-row:has(.completion-check:checked) .idea-title {
+  color: var(--muted);
+}
+.idea-row .idea-preview {
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+  font-size: 11.5px;
+  line-height: 1.55;
+  margin-top: 4px;
+}
+.idea-row .idea-meta {
+  margin-top: 6px;
+  font-size: 10px;
+}
+.idea-row .tag-chip {
+  font-size: 10px;
+  padding: 2px 6px;
+}
+.idea-row .tag-overflow {
+  color: var(--muted);
+  font-size: 10px;
+}
+.idea-row .completed-label {
+  font-size: 10px;
+  border-radius: 4px;
+}
+.idea-row .idea-thumbnail {
+  flex-basis: 48px;
+  width: 48px;
+  height: 48px;
+  border-radius: 7px;
+}
+.idea-row .row-actions {
+  flex-shrink: 0;
+  align-self: center;
+  margin-top: 0;
+  gap: 2px;
+  transition: opacity 140ms ease;
+}
+.idea-row .row-actions .icon-button {
+  width: 28px;
+  height: 28px;
+}
+@media (hover: hover) and (pointer: fine) {
+  .explorer-list .idea-row .row-actions {
+    opacity: 0;
+  }
+  .explorer-list .idea-row:hover .row-actions,
+  .explorer-list .idea-row:focus-within .row-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+@media (hover: none), (pointer: coarse) {
+  .explorer-list .idea-row .row-actions,
+  .explorer-list .idea-row .pin-action {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .explorer-list .idea-row .row-actions .icon-button {
+    min-width: 36px;
+    min-height: 36px;
+  }
+}
+.detail-panel {
+  flex-basis: min(var(--right-width), 42vw);
+  background: var(--panel);
+  animation: detail-reveal 175ms ease-out;
+}
+@keyframes detail-reveal {
+  from { opacity: 0.85; transform: translateX(8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@media (max-width: 1100px) {
+  .sidebar { flex-basis: min(var(--left-width), 240px); }
+  .detail-panel { flex-basis: min(var(--right-width), 39vw); min-width: 300px; }
+}
+@media (max-width: 850px) {
+  .main-content { --pad: 22px; }
+  .app-shell.detail-open .main-content { --pad: 20px; }
+}
+@media (max-width: 640px) {
+  .main-content,
+  .app-shell.detail-open .main-content { --pad: 18px; padding-top: 14px; }
+  .topbar { padding-inline: 16px; }
+  .list-title-row h1 { font-size: 25px; }
+  .list-header > .quick-create input { font-size: 16px; }
+  .list-header > .quick-create .primary { padding-inline: 10px; }
+  .explorer-list .idea-row { padding: 13px 4px; gap: 9px; }
+  .idea-row .idea-title { font-size: 13px; }
+  .idea-row .idea-preview { font-size: 11px; }
+  .idea-row .idea-thumbnail { flex-basis: 42px; width: 42px; height: 42px; }
+  .detail-panel { animation: none; }
+}
+
+
+
+/* A transient bulk-action bar avoids reflowing the entire list during marquee selection. */
+.mobile-selection-actions {
+  display: block;
+  flex: 0 0 auto;
+  max-height: 148px;
+  overflow: auto;
+  padding: 6px 0 7px;
+  border-top: 1px solid var(--line);
+}
+.mobile-selection-actions .explorer-actions {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  overflow: visible;
+}
+.mobile-selection-actions .explorer-actions h2 {
+  margin: 0 5px 0 0;
+  font-size: 12px;
+  font-weight: 650;
+}
+.mobile-selection-actions .explorer-actions > button {
+  padding: 6px 9px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+.mobile-selection-actions .explorer-actions select {
+  width: auto;
+  max-width: 220px;
+  font-size: 11px;
+}
+.app-shell.detail-open .mobile-selection-actions {
+  display: none;
+}
+@media (max-width: 640px) {
+  .mobile-selection-actions,
+  .app-shell.detail-open .mobile-selection-actions {
+    display: block;
+    max-height: 210px;
+  }
+  .mobile-selection-actions .explorer-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 10px 0;
+  }
+  .mobile-selection-actions .explorer-actions h2,
+  .mobile-selection-actions .explorer-actions select {
+    grid-column: 1 / -1;
+  }
+}

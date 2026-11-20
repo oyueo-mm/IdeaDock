@@ -117,7 +117,7 @@ test("layout and theme persist with no horizontal overflow", async ({
     });
     await handle.focus();
     await page.keyboard.press("ArrowRight");
-    await expect(handle).toHaveAttribute("aria-valuenow", "310");
+    await expect(handle).toHaveAttribute("aria-valuenow", "272");
     await page.getByRole("button", { name: "왼쪽 패널 접기" }).click();
     await page
       .getByRole("button", { name: "탐색 패널 열기", exact: true })
@@ -126,9 +126,9 @@ test("layout and theme persist with no horizontal overflow", async ({
       page.getByRole("button", { name: "새 아이디어", exact: true }),
     ).toBeVisible();
     await page.getByRole("button", { name: "왼쪽 패널 접기" }).click();
-    await page
-      .getByRole("button", { name: "오른쪽 패널 열기 또는 접기" })
-      .click();
+    await expect(
+      page.getByRole("button", { name: "오른쪽 패널 열기 또는 접기" }),
+    ).toHaveCount(0);
     await page.reload();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
     await expect(
@@ -306,4 +306,33 @@ test("image paste/upload, enlargement and deletion", async ({ page }) => {
     .getByRole("button", { name: "second.png 이미지 삭제", exact: true })
     .click();
   await expect(thumbnail).toHaveCount(0);
+});
+
+test("details appear only for selection, quick capture stays in the list", async ({ page }, testInfo) => {
+  const details = page.getByRole("complementary", { name: "아이디어 상세" });
+  const toggle = page.getByRole("button", { name: "오른쪽 패널 열기 또는 접기" });
+  await expect(details).toHaveCount(0);
+  await expect(toggle).toHaveCount(0);
+  await createIdea(page, "패널 테스트");
+  await expect(details).toBeVisible();
+  await page.getByRole("button", { name: "상세 패널 닫기" }).click();
+  await expect(details).toHaveCount(0);
+  const capture = page.getByRole("textbox", { name: "아이디어 빠른 추가" });
+  await expect(capture).toBeVisible();
+  await capture.fill("즉시 추가한 아이디어");
+  await capture.press("Enter");
+  const row = page.getByRole("article").filter({ hasText: "즉시 추가한 아이디어" });
+  await expect(row).toBeVisible();
+  await expect(details).toHaveCount(0);
+  await row.locator(".idea-summary").click();
+  await expect(details).toBeVisible();
+  if (testInfo.project.name === "mobile") {
+    await page.getByRole("button", { name: "상세 패널 닫기" }).click();
+    await expect(details).toHaveCount(0);
+  } else {
+    await toggle.click();
+    await expect(details).toHaveCount(0);
+    await toggle.click();
+    await expect(details).toBeVisible();
+  }
 });

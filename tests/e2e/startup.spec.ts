@@ -13,6 +13,9 @@ test("signed-out UI hides empty counts, preserves resized panels and distinguish
   await expect(
     page.getByText("아이디어가 없습니다", { exact: true }),
   ).toHaveCount(0);
+  await expect(
+    page.getByRole("complementary", { name: "아이디어 상세" }),
+  ).toHaveCount(0);
   await expect(page.getByText("태그 없음", { exact: true })).toHaveCount(0);
   await expect(page.locator(".sidebar nav small")).toHaveCount(0);
   await expect(
@@ -27,7 +30,7 @@ test("signed-out UI hides empty counts, preserves resized panels and distinguish
       name: "탐색 패널 너비",
       exact: true,
     });
-    await expect(left).toHaveAttribute("aria-valuenow", "290");
+    await expect(left).toHaveAttribute("aria-valuenow", "252");
     await expect(page.locator(".topbar")).toHaveCSS("height", "40px");
   }
   await page.evaluate(() =>
