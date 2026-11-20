@@ -574,8 +574,12 @@ test("the list header is compact and the detail panel packs its sections", async
   const mobile = info.project.name === "mobile";
   await open(page, context, { ideas: 8, revisions: 1, folders: 1, images: 2 });
   const header = await box(page.locator(".list-header"));
-  expect(header.height).toBeLessThan(mobile ? 120 : 100);
-  expect((await box(rows(page).first())).y).toBeLessThan(mobile ? 175 : 150);
+  // The dedicated quick-capture row takes space below the title without overlap.
+  expect(header.height).toBeLessThan(180);
+  const titleBox = await box(page.locator(".list-title-row h1"));
+  const captureBox = await box(page.getByRole("textbox", { name: "아이디어 빠른 추가" }));
+  expect(captureBox.y).toBeGreaterThan(titleBox.y + titleBox.height);
+  expect((await box(rows(page).first())).y).toBeLessThan(mobile ? 265 : 255);
   expect((await box(page.locator(".topbar"))).height).toBeLessThanOrEqual(
     mobile ? 48 : 40,
   );
